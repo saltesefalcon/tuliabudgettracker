@@ -372,7 +372,7 @@ function resetIdle(){ if(idleTimer) clearTimeout(idleTimer); idleTimer=setTimeou
 ["click","keydown","mousemove","touchstart"].forEach(ev=> window.addEventListener(ev, resetIdle, {passive:true}));
 
 firebase.auth().onAuthStateChanged(user=>{
-  isOwner = !!(user && user.uid===OWNER_UID);
+  isOwner = !!(user && OWNER_UIDS.includes(user.uid));
   signInBtn.style.display = isOwner ? "none":"inline-block";
   signOutBtn.style.display= isOwner ? "inline-block":"none";
   lockBadge.textContent   = isOwner ? "Editing (Owner)" : "View-only";
