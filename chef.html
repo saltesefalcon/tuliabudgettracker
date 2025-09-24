@@ -120,14 +120,18 @@ button.ghost{background:transparent}
 <script>
 /* ---------------- Firebase init ---------------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyDl7NhJHjm1wp0LwIWN-mtCDh_WD6I-MRA",
+  apiKey: "AIzaSyBtTQJDlqUfRh46H7wLM7UxPxQup0DG40o",
   authDomain: "tulia-budget-tracker.firebaseapp.com",
   projectId: "tulia-budget-tracker",
   storageBucket: "tulia-budget-tracker.firebasestorage.app",
-  messagingSenderId: "331061494606",
-  appId: "1:331061494606:web:8edb403b944002ed80141f"
+  messagingSenderId: "810720369340",
+  appId: "1:810720369340:web:4ab200c745be7df307ceb9"
 };
-const OWNER_UID = "vv2z07G4g5ZG8wsLgJQGkQFxFaf2";
+// support multiple owners
+const OWNER_UIDS = [
+  "TCNpi8zcTQgtIvfKHOkClgBLnsk1",   // first UID
+  "K2dbWGjfmCM2lkzRfkIQtdqrlaH2"   // second UID
+];
 
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
