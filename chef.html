@@ -189,7 +189,7 @@ document.getElementById("authLogin").onclick  = async ()=>{
 btnSignOut.onclick = ()=> firebase.auth().signOut();
 
 firebase.auth().onAuthStateChanged(u=>{
-  isOwner = !!(u && u.uid===OWNER_UID);
+  isOwner = !!(u && OWNER_UIDS.includes(user.uid));
   btnSignIn.style.display  = isOwner ? "none":"inline-block";
   btnSignOut.style.display = isOwner ? "inline-block":"none";
   lockBadge.textContent    = isOwner ? "Editing (Owner)" : "View-only";
