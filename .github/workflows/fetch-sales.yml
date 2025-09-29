@@ -1,46 +1,41 @@
-name: Fetch 7shifts sales
+name: fetch-sales
 
 on:
-  workflow_dispatch:
-    inputs:
-      week:
-        description: "Week-of Monday (YYYY-MM-DD). Leave blank for current week."
-        required: false
-      companyId:
-        description: "7shifts Company ID"
-        required: false
-        default: "283376"
-      locationId:
-        description: "7shifts Location ID"
-        required: false
-        default: "351442"
+  workflow_dispatch:    # allow manual runs
   schedule:
-    # Runs 6am & 6pm Toronto time during DST (10:00/22:00 UTC). 
-    # In winter this will be 11:00/23:00 UTC — change later if you want exact local times year-round.
-    - cron: "0 10 * * *"
-    - cron: "0 22 * * *"
+    # Cron is UTC in GitHub Actions.
+    # 6am/6pm Toronto ≈ 10:00 / 22:00 UTC during DST (EDT). In winter (EST) it's 11:00 / 23:00.
+    - cron: "0 10,22 * * *"
 
 jobs:
-  fetch:
+  pull_and_push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
 
-      # Install deps (noop if package.json doesn't exist)
-      - name: Install dependencies
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
         run: |
-          npm -v || true
-          npm i firebase-admin node-fetch@3
+          python -m pip install --upgrade pip
+          pip install google-cloud-firestore google-auth requests
+
+      - name: Write Firebase service account JSON
+        run: |
+          echo '${{ secrets.FIREBASE_SA_JSON }}' > $GITHUB_WORKSPACE/sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/sa.json" >> $GITHUB_ENV
 
       - name: Run fetcher
         env:
           SEVENSHIFTS_TOKEN: ${{ secrets.SEVENSHIFTS_TOKEN }}
-          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
-          COMPANY_ID:  ${{ github.event.inputs.companyId || '283376' }}
-          LOCATION_ID: ${{ github.event.inputs.locationId || '351442' }}
-          WEEK_OF:     ${{ github.event.inputs.week || '' }}
-          WORKSPACE:   tulia
-        run: node scripts/fetch_sales.js
+          COMPANY_ID: "283376"   # <- update if needed
+          LOCATION_ID: "351442"  # <- update if needed
+          WORKSPACE: "tulia"
+          LOCAL_TZ: "America/Toronto"
+        run: |
+          python scripts/fetch_7shifts_to_firestore.py
