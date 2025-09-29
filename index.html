@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Tulia Weekly Food Budget Tracker</title>
+
+<style>
+  :root { --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --accent:#22c55e; --warn:#ef4444; --brand:#0ea5e9; }
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+  .wrap{max-width:1100px;margin:24px auto;padding:16px}
+  h1{font-size:1.6rem;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:.95rem;margin-bottom:16px}
+  .panel{background:var(--panel);border-radius:14px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+  .toolbar>*{margin-right:6px}
+  input[type="number"],input[type="text"],input[type="email"],input[type="password"],select{background:#0b1220;color:var(--ink);border:1px solid #1f2937;border-radius:10px;padding:8px 10px;outline:0;width:100%}
+  input[disabled], select[disabled]{opacity:.6}
+  button{background:#1f2937;color:var(--ink);border:1px solid #374151;border-radius:10px;padding:8px 12px;cursor:pointer}
+  button.primary{background:var(--brand);border-color:#0284c7;color:#fff}
+  button.success{background:var(--accent);border-color:#16a34a;color:#000}
+  button.warn{background:var(--warn);border-color:#b91c1c;color:#fff}
+  button.ghost{background:transparent;border-color:#374151}
+  .week-range{margin-left:auto;font-weight:800}
+
+  table{width:100%;border-collapse:collapse;font-size:.95rem;table-layout:fixed}
+  th,td{border-bottom:1px solid #1f2937;padding:8px;text-align:right}
+  th:first-child,td:first-child{ text-align:left; position:sticky; left:0; background:var(--panel); z-index:2 }
+  thead th{position:sticky;top:0;z-index:3;background:#0b1220}
+  tbody tr:hover td{background:#0b1220}
+  .totals{font-weight:700}
+  .over{color:var(--warn);font-weight:700}
+  .under{color:var(--accent);font-weight:700}
+  .note{color:var(--muted);font-size:.85rem}
+
+  .summary-banner{display:flex;gap:16px;flex-wrap:wrap;align-items:center;background:#0b1220;border:1px solid #1f2937;padding:10px 12px;border-radius:12px}
+  .chip{padding:6px 10px;border-radius:999px;background:#111827;border:1px solid #1f2937}
+  .chip b{margin-right:6px}
+  .chip.over{border-color:#7f1d1d;background:#1b1212}
+  .chip.under{border-color:#14532d;background:#0f1a12}
+
+  .mobile-controls{display:none;justify-content:center;gap:12px;margin:10px 0}
+  .mobile-controls button{font-size:1.1rem;padding:6px 12px}
+
+  .howto{ display:none !important; }
+  .howto.open{ display:block !important; }
+
+  .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);z-index:9990}
+  .modal.open{display:flex}
+  .modal .card{background:var(--panel);border:1px solid #1f2937;padding:16px;border-radius:14px;width:min(620px,92vw)}
+  .row{display:grid;grid-template-columns:1fr 220px;gap:10px;align-items:center;margin-bottom:8px}
+  .row label{color:var(--muted)}
+  .row .pct{display:flex;align-items:center;gap:6px}
+
+  .shade{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;display:none}
+  .popover{position:fixed;z-index:9999;display:none;background:var(--panel);border:1px solid #1f2937;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.5);width:min(760px,95vw);min-width:520px;padding:14px;top:50vh;left:50vw;transform:translate(-50%,-50%)}
+  .pop-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;cursor:move}
+  .pop-title{font-weight:700}
+  .pop-close{background:transparent;border:1px solid #374151;border-radius:8px;padding:4px 8px}
+  .grid-head,.grid-rows{display:grid;grid-template-columns:120px 1fr 1fr 44px;gap:8px;align-items:center}
+  .grid-head{color:var(--muted);font-size:.85rem;margin-bottom:4px}
+  .pop-actions{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+  .mini{font-size:.95rem;padding:8px 12px}
+  .total-badge{background:#0b1220;border:1px solid #374151;padding:6px 10px;border-radius:10px}
+
+  .auth{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .lock-badge{background:#0b1220;border:1px solid #374151;padding:6px 10px;border-radius:10px;font-weight:600}
+  .lock-badge.ok{border-color:#14532d;color:#22c55e}
+  .lock-badge.no{border-color:#7f1d1d;color:#ef4444}
+
+  /* Phone / portrait: responsive two-column view */
+  @media (max-width:760px){
+    .wrap{padding:10px}
+    table{table-layout:auto;font-size:0.95rem}
+    #budgetTable th.totals-col, #budgetTable td.totals-col{ display:none !important; }
+    #budgetTable th:first-child, #budgetTable td:first-child{ min-width:38vw; max-width:38vw; white-space:normal; }
+    #budgetTable th[data-day-idx], #budgetTable td[data-day-idx]{ width:31vw; white-space:nowrap; }
+  }
+</style>
+
+<script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Tulia Weekly Food Budget Tracker</h1>
+    <div class="sub">(Monday → Sunday + Totals) with live per-day budgets &amp; over/under.</div>
+
+    <div class="panel">
+      <div class="toolbar">
+        <label>Week of <input id="weekOf" type="date" step="7" min="2000-01-03" /></label>
+        <button class="primary" id="newWeek">New Blank Week</button>
+        <button id="saveLocal">Save (Local)</button>
+        <button id="loadLocal">Load (Local)</button>
+        <button class="success" id="exportJSON">Export JSON</button>
+        <button id="exportExcel">Export Excel</button>
+        <input type="file" id="importFile" accept=".json"/>
+        <button id="toggleHowto" class="ghost">Show Help</button>
+        <button id="openSettings" class="ghost">Budget Settings</button>
+        <div class="week-range" id="weekRange"></div>
+        <div class="auth">
+          <button id="signIn" class="ghost">Sign In</button>
+          <button id="signOut" class="ghost" style="display:none">Sign Out</button>
+          <div id="lockBadge" class="lock-badge no">View-only</div>
+        </div>
+      </div>
+
+      <div class="summary-banner">
+        <div class="chip"><b>Projected:</b> <span id="chipProj">$0.00</span></div>
+        <div class="chip"><b>Actual:</b> <span id="chipAct">$0.00</span></div>
+        <div class="chip"><b>Sales Δ:</b> <span id="chipSalesDelta">$0.00</span></div>
+        <div class="chip"><b>Weekly Budget:</b> <span id="chipBudget">$0.00</span></div>
+        <div class="chip"><b>Purchases:</b> <span id="chipPurch">$0.00</span></div>
+        <div class="chip" id="chipNet"><b>Net O/U:</b> <span id="chipNetVal">$0.00</span></div>
+      </div>
+
+      <!-- Mobile controls -->
+      <div class="mobile-controls" id="mobileControls">
+        <button id="mobPrev" aria-label="Previous days">◀</button>
+        <button id="mobNext" aria-label="Next days">▶</button>
+      </div>
+
+      <div class="panel howto" id="howto">
+        <h3 style="margin-top:0">How it works</h3>
+        <ol class="note" style="line-height:1.6">
+          <li>Budgets are auto-calculated from sales using <b>Budget Settings</b>.</li>
+          <li>“Food % Estimator” (optional) scales totals to approximate Food for both Projected and Actual.</li>
+          <li>Daily budgets are allocated <b>Proportional to daily Projected Sales</b> (or evenly if chosen).</li>
+          <li>Per-day O/U = <code>Daily Budget - Daily Purchases</code>. Weekly O/U equals the sum of days.</li>
+        </ol>
+      </div>
+
+      <table id="budgetTable" style="margin-top:12px">
+        <thead>
+          <tr id="headerRow">
+            <th>Line</th>
+            <th data-day-idx="0">Monday</th>
+            <th data-day-idx="1">Tuesday</th>
+            <th data-day-idx="2">Wednesday</th>
+            <th data-day-idx="3">Thursday</th>
+            <th data-day-idx="4">Friday</th>
+            <th data-day-idx="5">Saturday</th>
+            <th data-day-idx="6">Sunday</th>
+            <th class="totals-col">Totals</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+
+      <div class="note" style="margin-top:10px">Built from your spreadsheet layout. No server required.</div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="modal" id="settingsModal" aria-modal="true" role="dialog" aria-label="Budget Settings">
+    <div class="card">
+      <h3 style="margin-top:0">Budget Settings</h3>
+
+      <div class="row">
+        <label>Base budgets on:</label>
+        <div>
+          <select id="budgetBase">
+            <option value="projected">Projected Sales</option>
+            <option value="actual">Actual Sales</option>
+            <option value="smart">Smart (Actual when entered, else Projected)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <label>Daily allocation method:</label>
+        <div>
+          <select id="allocMethod">
+            <option value="proportional">Proportional to daily Projected Sales</option>
+            <option value="even">Evenly across 7 days</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- NEW: Food % Estimator -->
+      <div class="row">
+        <label>Food % Estimator (applies to totals)</label>
+        <div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <label style="display:flex;gap:6px;align-items:center">
+              <input type="checkbox" id="foodPctEnabled" />
+              <span>Enable</span>
+            </label>
+            <div class="pct">
+              <input id="foodPctValue" type="number" step="0.1" min="0" max="100" value="75" />
+              <span>% of sales</span>
+            </div>
+          </div>
+          <div class="note">When ON, Projected & Actual display approx. Food = totals × %.</div>
+        </div>
+      </div>
+
+      <!-- Category budgets -->
+      <div class="row"><label>Meat %</label><div class="pct"><input id="pct_meat" type="number" step="0.1" min="0" max="100" value="25"/>%</div></div>
+      <div class="row"><label>Seafood %</label><div class="pct"><input id="pct_sea" type="number" step="0.1" min="0" max="100" value="15"/>%</div></div>
+      <div class="row"><label>Bread/Pasta %</label><div class="pct"><input id="pct_bread" type="number" step="0.1" min="0" max="100" value="10"/>%</div></div>
+      <div class="row"><label>Produce %</label><div class="pct"><input id="pct_produce" type="number" step="0.1" min="0" max="100" value="20"/>%</div></div>
+      <div class="row"><label>Pantry %</label><div class="pct"><input id="pct_pantry" type="number" step="0.1" min="0" max="100" value="15"/>%</div></div>
+      <div class="row"><label>Dairy %</label><div class="pct"><input id="pct_dairy" type="number" step="0.1" min="0" max="100" value="15"/>%</div></div>
+
+      <p class="note">Budgets update automatically when sales change.</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+        <button id="closeSettings">Close</button>
+        <button class="success" id="applySettings">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth modal -->
+  <div class="modal" id="authModal" aria-modal="true" role="dialog" aria-label="Sign In">
+    <div class="card">
+      <h3 style="margin-top:0">Sign In</h3>
+      <div style="display:grid;gap:10px">
+        <label>Email <input id="authEmail" type="email" placeholder="owner@example.com"/></label>
+        <label>Password <input id="authPass" type="password" placeholder="••••••••"/></label>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="ghost" id="authCancel">Cancel</button>
+          <button class="primary" id="authLogin">Sign In</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Purchases window -->
+  <div id="shade" class="shade"></div>
+  <div id="popover" class="popover"></div>
+
+<script>
+/* ---------------- Firebase init ---------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyBtTQJDlqUfRh46H7wLM7UxPxQup0DG40o",
+  authDomain: "tulia-budget-tracker.firebaseapp.com",
+  projectId: "tulia-budget-tracker",
+  storageBucket: "tulia-budget-tracker.firebasestorage.app",
+  messagingSenderId: "810720369340",
+  appId: "1:810720369340:web:4ab200c745be7df307ceb9"
+};
+// support multiple owners (only these UIDs can edit settings & data)
+const OWNER_UIDS = [
+  "TCNpi8zcTQgtIvfKHOkClgBLnsk1",
+  "K2dbWGjfmCM2lkzRfkIQtdqrlaH2"
+];
+
+firebase.initializeApp(firebaseConfig);
+const db  = firebase.firestore();
+
+/* ------------ Helpers & constants ------------- */
+const URL_WS      = new URLSearchParams(location.search).get("ws") || "tulia";
+const LS_WEEK_KEY = "tracker_last_week";
+
+const DAYS     = ["mon","tue","wed","thu","fri","sat","sun"];
+const DAYNAME  = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const DAYSHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const weeksCol = () => db.collection("workspaces").doc(URL_WS).collection("weeks");
+
+function num(v){ const n=parseFloat(v); return isNaN(n)?0:n; }
+function money(n){ return (Math.round(n*100)/100).toFixed(2); }
+function sumDays(row){ return DAYS.reduce((a,d)=>a+num(row?.[d]),0); }
+function parseLocalISO(s){ if(!s) return null; const [y,m,d]=s.split("-").map(Number); const dt=new Date(y,(m||1)-1,(d||1)); dt.setHours(0,0,0,0); return dt; }
+function toISO(d){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), dd=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${dd}`; }
+function startOfWeekMonday(d){ const day=d.getDay(); const diff=(day+6)%7; const out=new Date(d); out.setDate(d.getDate()-diff); out.setHours(0,0,0,0); return out; }
+function addDays(d,n){ const out=new Date(d); out.setDate(d.getDate()+n); out.setHours(0,0,0,0); return out; }
+function monthShort(d){ return d.toLocaleString(undefined,{month:"short"}) }
+function ordinal(n){ const s=["th","st","nd","rd"], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]) }
+function formatWeekRange(mon){ if(!mon) return ""; const sun=addDays(mon,6); const same=mon.getMonth()===sun.getMonth(); const left=`${monthShort(mon)} ${mon.getDate()}`; const right=`${same?sun.getDate():monthShort(sun)+" "+sun.getDate()}, ${sun.getFullYear()}`; return `${left}–${right}`; }
+
+const PURCHASE_LINES = {
+  meat_purch:    { suppliersKey:"meat",    title:"Meat Deliveries" },
+  seafood_purch: { suppliersKey:"sea",     title:"Seafood Deliveries" },
+  bread_purch:   { suppliersKey:"bread",   title:"Bread/Pasta Deliveries" },
+  produce_purch: { suppliersKey:"produce", title:"Produce Deliveries" },
+  pantry_purch:  { suppliersKey:"pantry",  title:"Pantry Deliveries" },
+  dairy_purch:   { suppliersKey:"dairy",   title:"Dairy Deliveries" },
+};
+
+const LINES = [
+  { key:"proj_sales",  label:"Projected Food Sales", type:"days" },
+  { key:"actual_sales",label:"Actual Sales",         type:"days" },
+  { key:"sales_delta", label:"Sales O/U",            type:"calcSalesDelta" },
+
+  { key:"meat_budget",    label:"Meat Budget",        type:"autoDays", pctKey:"meat" },
+  { key:"seafood_budget", label:"Seafood Budget",     type:"autoDays", pctKey:"sea" },
+  { key:"bread_budget",   label:"Bread/Pasta Budget", type:"autoDays", pctKey:"bread" },
+  { key:"produce_budget", label:"Produce Budget",     type:"autoDays", pctKey:"produce" },
+  { key:"pantry_budget",  label:"Pantry Budget",      type:"autoDays", pctKey:"pantry" },
+  { key:"dairy_budget",   label:"Dairy Budget",       type:"autoDays", pctKey:"dairy" },
+
+  { key:"spacer1", label:"", type:"spacer" },
+
+  { key:"meat_purch",    label:"Meat Purchases",    type:"purchDays" },
+  { key:"meat_over",     label:"over/under",        type:"calcBudgetDays", dependsOnBudget:"meat_budget", dependsOnPurch:"meat_purch" },
+
+  { key:"seafood_purch", label:"Seafood Purchases", type:"purchDays" },
+  { key:"seafood_over",  label:"over/under",        type:"calcBudgetDays", dependsOnBudget:"seafood_budget", dependsOnPurch:"seafood_purch" },
+
+  { key:"bread_purch",   label:"Bread/Pasta Purchases", type:"purchDays" },
+  { key:"bread_over",    label:"over/under",            type:"calcBudgetDays", dependsOnBudget:"bread_budget", dependsOnPurch:"bread_purch" },
+
+  { key:"produce_purch", label:"Produce Purchases", type:"purchDays" },
+  { key:"produce_over",  label:"over/under",        type:"calcBudgetDays", dependsOnBudget:"produce_budget", dependsOnPurch:"produce_purch" },
+
+  { key:"pantry_purch",  label:"Pantry Purchases",  type:"purchDays" },
+  { key:"pantry_over",   label:"over/under",        type:"calcBudgetDays", dependsOnBudget:"pantry_budget", dependsOnPurch:"pantry_purch" },
+
+  { key:"dairy_purch",   label:"Dairy Purchases",   type:"purchDays" },
+  { key:"dairy_over",    label:"over/under",        type:"calcBudgetDays", dependsOnBudget:"dairy_budget", dependsOnPurch:"dairy_purch" },
+];
+
+function blankRow(){ return { mon:"",tue:"",wed:"",thu:"",fri:"",sat:"",sun:"", total:"" } }
+function blankWeek(){ const o={}; for(const l of LINES){ if(l.type!=="spacer") o[l.key]=blankRow(); } return o }
+
+let state = {
+  meta:{ weekOf:"" },
+  data: blankWeek(),
+  settings:{
+    base:"smart",
+    alloc:"proportional",
+    pct:{ meat:25, sea:15, bread:10, produce:20, pantry:15, dairy:15 },
+    suppliers:{ meat:[], sea:[], bread:[], produce:[], pantry:[], dairy:[] },
+    /* NEW: Food % estimator applied to totals */
+    foodPct:{ enabled:false, value:75 }
+  },
+  details:{} // purchases remembered here
+};
+
+/* -------------------- DOM refs ---------------- */
+const tbody     = document.getElementById("tbody");
+const pop       = document.getElementById("popover");
+const shade     = document.getElementById("shade");
+const weekInput = document.getElementById("weekOf");
+const weekRange = document.getElementById("weekRange");
+
+/* -------- Mobile view (2 columns, swipe) ------ */
+let mobileStart = 0;
+const mobPrev   = document.getElementById("mobPrev");
+const mobNext   = document.getElementById("mobNext");
+const mobCtrls  = document.getElementById("mobileControls");
+
+function isMobilePortrait(){ return window.matchMedia("(max-width: 760px)").matches; }
+function clampMobileStart(){ if(mobileStart<0) mobileStart=0; if(mobileStart>5) mobileStart=5; }
+function applyMobileVisibility(){
+  const isMob = isMobilePortrait();
+  mobCtrls.style.display = isMob ? "flex" : "none";
+  const dayCells = document.querySelectorAll('#budgetTable [data-day-idx]');
+  dayCells.forEach(el=>{
+    const idx = Number(el.getAttribute('data-day-idx'));
+    el.style.display = (isMob && (idx<mobileStart || idx>=mobileStart+2)) ? "none" : "";
+  });
+}
+mobPrev.addEventListener("click", ()=>{ mobileStart--; clampMobileStart(); applyMobileVisibility(); });
+mobNext.addEventListener("click", ()=>{ mobileStart++; clampMobileStart(); applyMobileVisibility(); });
+
+// finger swipe
+let touchX=null;
+const swipeArea=document.querySelector(".panel");
+swipeArea.addEventListener("touchstart",e=>{ touchX = e.changedTouches[0].clientX; },{passive:true});
+swipeArea.addEventListener("touchend",e=>{
+  if(touchX==null) return;
+  const dx=e.changedTouches[0].clientX - touchX;
+  const TH=40;
+  if(Math.abs(dx)>TH){ if(dx<0) mobileStart++; else mobileStart--; clampMobileStart(); applyMobileVisibility(); }
+  touchX=null;
+},{passive:true});
+window.addEventListener("resize", applyMobileVisibility);
+
+/* ----------------- Auth / Idle ---------------- */
+const signInBtn = document.getElementById("signIn");
+const signOutBtn= document.getElementById("signOut");
+const lockBadge = document.getElementById("lockBadge");
+const authModal = document.getElementById("authModal");
+document.getElementById("authCancel").onclick = ()=> authModal.classList.remove("open");
+document.getElementById("authLogin").onclick  = async ()=>{
+  const email=(document.getElementById("authEmail").value||"").trim();
+  const pass =(document.getElementById("authPass").value||"").trim();
+  if(!email||!pass) return alert("Enter email & password.");
+  try{ await firebase.auth().signInWithEmailAndPassword(email,pass); authModal.classList.remove("open"); }
+  catch(e){ alert(e.message||e.code); }
+};
+signInBtn.onclick  = ()=> authModal.classList.add("open");
+signOutBtn.onclick = ()=> firebase.auth().signOut();
+
+let isOwner=false, idleTimer=null;
+function resetIdle(){ if(idleTimer) clearTimeout(idleTimer); idleTimer=setTimeout(()=> firebase.auth().signOut().catch(()=>{}), 10*60*1000); }
+["click","keydown","mousemove","touchstart"].forEach(ev=> window.addEventListener(ev, resetIdle, {passive:true}));
+
+firebase.auth().onAuthStateChanged(user=>{
+  isOwner = !!(user && OWNER_UIDS.includes(user.uid));
+  signInBtn.style.display = isOwner ? "none":"inline-block";
+  signOutBtn.style.display= isOwner ? "inline-block":"none";
+  lockBadge.textContent   = isOwner ? "Editing (Owner)" : "View-only";
+  lockBadge.classList.toggle("ok",isOwner);
+  lockBadge.classList.toggle("no",!isOwner);
+  resetIdle();
+  render();
+});
+
+/* ------------- Sales transforms / budgets ----- */
+function cloneRow(r){ return { mon:r?.mon??"", tue:r?.tue??"", wed:r?.wed??"", thu:r?.thu??"", fri:r?.fri??"", sat:r?.sat??"", sun:r?.sun??"", total:r?.total??"" } }
+function scaleRow(row, pct){
+  const f = Math.max(0, pct)/100;
+  const out = blankRow(); let t=0;
+  for(const d of DAYS){ const v = num(row?.[d]) * f; out[d] = money(v); t+=v; }
+  out.total = money(t); return out;
+}
+function effectiveRow(rowKey){
+  const src = state.data[rowKey] || blankRow();
+  if (state?.settings?.foodPct?.enabled) return scaleRow(src, num(state.settings.foodPct.value));
+  return cloneRow(src);
+}
+
+/* base row for budgets */
+function baseSalesRow(){
+  if (state.settings.base==="projected") return effectiveRow("proj_sales");
+  if (state.settings.base==="actual")    return effectiveRow("actual_sales");
+
+  // smart: use Actual (scaled if enabled) when present, else Projected (scaled if enabled)
+  const effA = effectiveRow("actual_sales");
+  const effP = effectiveRow("proj_sales");
+  const out=blankRow(); let t=0;
+  for(const d of DAYS){
+    const hasA = state.data.actual_sales?.[d] !== "" && state.data.actual_sales?.[d] != null;
+    const v = hasA ? num(effA[d]) : num(effP[d]);
+    out[d] = money(v); t+=v;
+  }
+  out.total = money(t); return out;
+}
+
+function distributeBudget(weekly, projRow){
+  const out={mon:0,tue:0,wed:0,thu:0,fri:0,sat:0,sun:0};
+  if (state.settings.alloc==="even"){
+    const each=weekly/7; for(const d of DAYS) out[d]=each;
+  } else {
+    const totals=sumDays(projRow);
+    if (totals>0) for(const d of DAYS) out[d]=weekly*(num(projRow[d])/totals);
+    else { const each=weekly/7; for(const d of DAYS) out[d]=each; }
+  }
+  return out;
+}
+function autoBudgets(){
+  const baseRow=baseSalesRow();
+  const baseSum=sumDays(baseRow);
+  for(const line of LINES){
+    if(line.type==="autoDays"){
+      if(!state.data[line.key]) state.data[line.key]=blankRow();
+      const pct=num(state.settings.pct[line.pctKey]);
+      const weekly=baseSum*(pct/100);
+      const parts=distributeBudget(weekly, effectiveRow("proj_sales")); // proportions follow projected (scaled doesn’t change proportions)
+      let total=0; for(const d of DAYS){ state.data[line.key][d]=money(parts[d]); total+=parts[d]; }
+      state.data[line.key].total=money(total);
+    }
+  }
+}
+
+/* -------------------- Recalc ------------------ */
+function recalc(){
+  autoBudgets();
+
+  // derive delta from effective rows
+  const effA = effectiveRow("actual_sales");
+  const effP = effectiveRow("proj_sales");
+  if (!state.data.sales_delta) state.data.sales_delta = blankRow();
+  let totDelta=0;
+  for(const d of DAYS){
+    const hasA = state.data.actual_sales?.[d] !== "" && state.data.actual_sales?.[d] != null;
+    const hasP = state.data.proj_sales?.[d]   !== "" && state.data.proj_sales?.[d]   != null;
+    const v = (hasA && hasP) ? (num(effA[d]) - num(effP[d])) : 0;
+    state.data.sales_delta[d] = money(v);
+    totDelta += v;
+  }
+  state.data.sales_delta.total = money(totDelta);
+
+  render(); updateSummary();
+}
+let recalcTimer=null, saveTimer=null;
+function scheduleRecalc(){ clearTimeout(recalcTimer); recalcTimer=setTimeout(recalc,200); }
+function scheduleSave(){  clearTimeout(saveTimer ); saveTimer =setTimeout(()=> saveStatePartial({data:state.data,details:state.details,settings:state.settings,meta:state.meta}),350); }
+
+/* -------------------- Render ------------------ */
+function setHeaderDates(){
+  const mondayISO=state.meta?.weekOf; const mon=mondayISO?parseLocalISO(mondayISO):null;
+  const headerCells=document.querySelectorAll('#headerRow th[data-day-idx]');
+  const useShort = isMobilePortrait();
+  headerCells.forEach((th,i)=>{
+    if(mon){
+      const d=addDays(mon,i);
+      th.textContent = (useShort?DAYSHORT[i]:DAYNAME[i]) + " " + ordinal(d.getDate());
+    }else{
+      th.textContent = useShort?DAYSHORT[i]:DAYNAME[i];
+    }
+  });
+  weekRange.textContent = mon ? formatWeekRange(mon) : "";
+}
+function cellTdDayIdx(td,dayKey){ td.setAttribute("data-day-idx",DAYS.indexOf(dayKey)); return td }
+
+/* sales cells: when Food% estimator ON or viewer is not owner, show read-only effective values */
+function buildSalesCell(lineKey,dayKey){
+  const td=cellTdDayIdx(document.createElement("td"),dayKey);
+  const estimatorOn = !!state?.settings?.foodPct?.enabled;
+  if (!isOwner || estimatorOn) {
+    const eff = effectiveRow(lineKey);
+    td.className="totals";
+    td.textContent = money(num(eff[dayKey]));
+    return td;
+  }
+  // owner + estimator OFF => editable
+  if(!state.data[lineKey]) state.data[lineKey]=blankRow();
+  const input=document.createElement("input");
+  input.type="number"; input.step="0.01"; input.inputMode="decimal";
+  input.dataset.bindid = `${lineKey}.${dayKey}`;
+  input.value=state.data[lineKey][dayKey]; input.placeholder="";
+  input.disabled = !isOwner;
+  input.addEventListener("input",e=>{ state.data[lineKey][dayKey]=e.target.value; scheduleRecalc(); persist(); scheduleSave(); });
+  td.appendChild(input); return td;
+}
+
+function buildInputCell(lineKey,dayKey){
+  if (lineKey==="proj_sales" || lineKey==="actual_sales") return buildSalesCell(lineKey,dayKey);
+  if(!state.data[lineKey]) state.data[lineKey]=blankRow();
+  const td=cellTdDayIdx(document.createElement("td"),dayKey);
+  const input=document.createElement("input");
+  input.type="number"; input.step="0.01"; input.inputMode="decimal";
+  input.dataset.bindid = `${lineKey}.${dayKey}`;
+  input.value=state.data[lineKey][dayKey]; input.placeholder="";
+  input.disabled = !isOwner; // non-owners cannot edit any numeric cells
+  input.addEventListener("input",e=>{ state.data[lineKey][dayKey]=e.target.value; scheduleRecalc(); persist(); scheduleSave(); });
+  td.appendChild(input); return td;
+}
+function buildReadOnlyCell(lineKey,dayKey,colorize=false){
+  if(!state.data[lineKey]) state.data[lineKey]=blankRow();
+  const td=cellTdDayIdx(document.createElement("td"),dayKey);
+  const v=num(state.data[lineKey][dayKey]); td.className="totals"; td.textContent=money(v);
+  if(colorize){ if(v<0) td.classList.add("over"); else if(v>0) td.classList.add("under"); }
+  return td;
+}
+function buildPurchCell(lineKey,dayKey){
+  if(!state.data[lineKey]) state.data[lineKey]=blankRow();
+  const td=cellTdDayIdx(document.createElement("td"),dayKey);
+  const btn=document.createElement("button"); const val=state.data[lineKey][dayKey];
+  btn.textContent=(val && num(val)>0) ? "$"+money(num(val)) : "Click to add purchases";
+  btn.className="ghost"; btn.style.width="100%"; btn.disabled=!isOwner;
+  btn.addEventListener("click",()=> openPurchasesEditor(lineKey,dayKey));
+  td.appendChild(btn); return td;
+}
+function render(){
+  setHeaderDates();
+
+  const active = document.activeElement;
+  const isInput = active && active.tagName==="INPUT" && active.dataset && active.dataset.bindid;
+  const bindId  = isInput ? active.dataset.bindid : null;
+  const caret   = isInput ? active.selectionStart : null;
+
+  for(const l of LINES){ if(l.type!=="spacer" && !state.data[l.key]) state.data[l.key]=blankRow(); }
+  tbody.innerHTML="";
+  for(const line of LINES){
+    const tr=document.createElement("tr");
+    const th=document.createElement("th"); th.textContent=line.label + (state?.settings?.foodPct?.enabled && (line.key==="proj_sales"||line.key==="actual_sales") ? " (est.)" : ""); tr.appendChild(th);
+    if(line.type==="spacer"){
+      const td=document.createElement("td"); td.colSpan=8; td.innerHTML="&nbsp;"; tr.appendChild(td); tbody.appendChild(tr); continue;
+    }
+    for(const d of DAYS){
+      let cell;
+      if(line.type==="days"){ cell=buildInputCell(line.key,d); }
+      else if(line.type==="autoDays"){ cell=buildReadOnlyCell(line.key,d,false); }
+      else if(line.type==="calcSalesDelta"){ cell=buildReadOnlyCell(line.key,d,true); }
+      else if(line.type==="calcBudgetDays"){ cell=buildReadOnlyCell(line.key,d,true); }
+      else if(line.type==="purchDays"){ cell=buildPurchCell(line.key,d); }
+      else { cell=buildReadOnlyCell(line.key,d,false); }
+      tr.appendChild(cell);
+    }
+    const totalTd=document.createElement("td");
+    totalTd.classList.add("totals-col");
+    let val;
+    if (line.key==="proj_sales" || line.key==="actual_sales"){
+      const eff = effectiveRow(line.key); val = num(eff.total);
+    } else {
+      val = num(state.data[line.key].total);
+    }
+    totalTd.className += (line.type==="calcBudgetDays"||line.type==="calcSalesDelta")?(" totals "+(val<0?"over":val>0?"under":"")):" totals totals-col";
+    totalTd.textContent=money(val);
+    tr.appendChild(totalTd);
+    tbody.appendChild(tr);
+  }
+
+  if (bindId){
+    const next = tbody.querySelector(`input[data-bindid="${bindId}"]`);
+    if (next){
+      next.focus();
+      if (caret!=null){ try{ next.setSelectionRange(caret, caret); }catch{} }
+    }
+  }
+
+  clampMobileStart(); applyMobileVisibility();
+}
+function updateSummary(){
+  const budgets = ["meat_budget","seafood_budget","bread_budget","produce_budget","pantry_budget","dairy_budget"].reduce((a,k)=>a+num(state.data[k].total),0);
+  const purch   = ["meat_purch","seafood_purch","bread_purch","produce_purch","pantry_purch","dairy_purch"].reduce((a,k)=>a+sumDays(state.data[k]),0);
+
+  const effA = effectiveRow("actual_sales");
+  const effP = effectiveRow("proj_sales");
+  const proj = sumDays(effP);
+  const act  = sumDays(effA);
+  const salesDelta = DAYS.reduce((a,d)=> a + ((state.data.actual_sales?.[d]!=="" && state.data.proj_sales?.[d]!=="" ) ? (num(effA[d]) - num(effP[d])) : 0), 0);
+
+  document.getElementById("chipProj").textContent  = "$"+money(proj);
+  document.getElementById("chipAct").textContent   = "$"+money(act);
+  document.getElementById("chipSalesDelta").textContent = "$"+money(salesDelta);
+  document.getElementById("chipBudget").textContent= "$"+money(budgets);
+  document.getElementById("chipPurch").textContent = "$"+money(purch);
+  const net=budgets-purch; const chipNet=document.getElementById("chipNet");
+  document.getElementById("chipNetVal").textContent="$"+money(net);
+  chipNet.classList.remove("over","under"); if(net<0) chipNet.classList.add("over"); if(net>0) chipNet.classList.add("under");
+}
+
+/* -------- Purchases popover (persists items) -------- */
+function ensureDetailsSlot(lineKey,dayKey){
+  if(!state.details) state.details={};
+  if(!state.details[lineKey]) state.details[lineKey]={};
+  if(!Array.isArray(state.details[lineKey][dayKey])) state.details[lineKey][dayKey]=[];
+  return state.details[lineKey][dayKey];
+}
+function supplierOptionsFor(lineKey){
+  const key=PURCHASE_LINES[lineKey].suppliersKey;
+  const list=state?.settings?.suppliers?.[key];
+  return (Array.isArray(list)&&list.length?list:["Other"]);
+}
+let dragging=false, dragDX=0, dragDY=0;
+const popEl = document.getElementById("popover");
+function centerPopover(){ popEl.style.top="50vh"; popEl.style.left="50vw"; popEl.style.transform="translate(-50%,-50%)"; }
+function makeDraggable(){
+  const header=popEl.querySelector(".pop-header"); if(!header) return;
+  header.addEventListener("pointerdown",(e)=>{
+    dragging=true;
+    const r=popEl.getBoundingClientRect();
+    popEl.style.transform="none"; popEl.style.left=r.left+"px"; popEl.style.top=r.top+"px";
+    dragDX=e.clientX-r.left; dragDY=e.clientY-r.top;
+    window.addEventListener("pointermove", onDragMove, {passive:false});
+    window.addEventListener("pointerup", onDragEnd);
+  });
+}
+function onDragMove(e){ if(!dragging) return; e.preventDefault(); popEl.style.left=(e.clientX-dragDX)+"px"; popEl.style.top=(e.clientY-dragDY)+"px"; }
+function onDragEnd(){ dragging=false; window.removeEventListener("pointermove", onDragMove); window.removeEventListener("pointerup", onDragEnd); }
+function onEscClose(e){ if(e.key==="Escape") closePopover(); }
+function closePopover(){ popEl.style.display="none"; shade.style.display="none"; popEl.innerHTML=""; document.removeEventListener("keydown", onEscClose); }
+function openPurchasesEditor(lineKey,dayKey){
+  if(!isOwner) return;
+  const meta=PURCHASE_LINES[lineKey];
+  const items=ensureDetailsSlot(lineKey,dayKey);
+  const dayTotal=num(state.data[lineKey]?.[dayKey]);
+  if(items.length===0 && dayTotal>0) items.push({amount:String(dayTotal),supplier:supplierOptionsFor(lineKey)[0]||"Other",invoice:""});
+  if(items.length===0) items.push({amount:"",supplier:supplierOptionsFor(lineKey)[0]||"Other",invoice:""});
+
+  const supplierOptions=supplierOptionsFor(lineKey).map(s=>`<option value="${s}">${s}</option>`).join("");
+
+  popEl.innerHTML=`
+    <div class="pop-header"><div class="pop-title">${meta.title} · ${dayKey.toUpperCase()}</div><button class="pop-close" id="popCloseBtn">Close</button></div>
+    <div class="grid-head"><div>Amount</div><div>Supplier</div><div>Invoice #</div><div></div></div>
+    <div class="grid-rows" id="popRows"></div>
+    <div class="pop-actions">
+      <div><button class="mini" id="addLineBtn">Add Line</button></div>
+      <div class="total-badge">Total: $<span id="popTotal">0.00</span></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+      <button class="ghost" id="popCancel">Cancel</button>
+      <button class="primary" id="popSave">Save</button>
+    </div>
+  `;
+  const rows=popEl.querySelector("#popRows");
+  function drawRows(){
+    rows.innerHTML="";
+    items.forEach((it,idx)=>{
+      const row=document.createElement("div"); row.style.display="contents";
+      row.innerHTML=`
+        <input type="number" step="0.01" inputmode="decimal" placeholder="0.00" value="${it.amount??""}">
+        <select>${supplierOptions}</select>
+        <input type="text" placeholder="e.g. 12345" value="${it.invoice??""}">
+        <button class="warn" title="Remove">×</button>
+      `;
+      const [amt,sel,inv,del]=row.children;
+      sel.value = it.supplier || supplierOptionsFor(lineKey)[0] || "Other";
+      amt.addEventListener("input", ()=>{ it.amount=amt.value; updateTotal(); persistTemp(); });
+      sel.addEventListener("input", ()=>{ it.supplier=sel.value; persistTemp(); });
+      inv.addEventListener("input", ()=>{ it.invoice=inv.value; persistTemp(); });
+      del.addEventListener("click", ()=>{
+        items.splice(idx,1);
+        if(items.length===0) items.push({amount:"",supplier:supplierOptionsFor(lineKey)[0]||"Other",invoice:""});
+        drawRows(); updateTotal(); persistTemp();
+      });
+      rows.appendChild(row);
+    });
+  }
+  function updateTotal(){
+    const tot=items.reduce((a,it)=>a+(parseFloat(it.amount)||0),0);
+    popEl.querySelector("#popTotal").textContent=money(tot);
+  }
+  function persistTemp(){ ensureDetailsSlot(lineKey,dayKey).splice(0,items.length,...items); }
+
+  drawRows(); updateTotal();
+
+  popEl.querySelector("#addLineBtn").addEventListener("click",()=>{ items.push({amount:"",supplier:supplierOptionsFor(lineKey)[0]||"Other",invoice:""}); drawRows(); updateTotal(); persistTemp(); });
+  popEl.querySelector("#popCancel").addEventListener("click", closePopover);
+  popEl.querySelector("#popCloseBtn").addEventListener("click", closePopover);
+  popEl.querySelector("#popSave").addEventListener("click", async ()=>{
+    const cleaned=items.map(it=>({amount:String(it.amount||""),supplier:it.supplier||"Other",invoice:it.invoice||""})).filter(it=>(parseFloat(it.amount)||0)>0);
+    state.details[lineKey][dayKey]=cleaned;
+    const total=cleaned.reduce((a,it)=>a+(parseFloat(it.amount)||0),0);
+    state.data[lineKey][dayKey]=money(total);
+    state.data[lineKey].total=money(sumDays(state.data[lineKey]));
+    persist(); await saveStatePartial({data:state.data,details:state.details}); recalc(); closePopover();
+  });
+
+  centerPopover(); popEl.style.display="block"; shade.style.display="block"; document.addEventListener("keydown", onEscClose); makeDraggable();
+}
+
+/* ---------------- Persistence ----------------- */
+function persist(){ localStorage.setItem("tulia_budget_draft", JSON.stringify(state)); }
+function load(){
+  const raw=localStorage.getItem("tulia_budget_draft"); if(!raw) return;
+  try{
+    const obj=JSON.parse(raw); if(!obj) return;
+    const base=blankWeek();
+    state={...state,...obj};
+    state.data   = Object.assign(base, obj.data||{});
+    state.details= obj.details || {};
+    if(!state.settings) state.settings = {};
+    if(!state.settings.pct) state.settings.pct={meat:25,sea:15,bread:10,produce:20,pantry:15,dairy:15};
+    if(!state.settings.suppliers) state.settings.suppliers={meat:[],sea:[],bread:[],produce:[],pantry:[],dairy:[]};
+    if(!state.settings.foodPct) state.settings.foodPct={enabled:false,value:75};
+  }catch(e){ console.warn("Bad local draft, ignoring.",e); }
+}
+async function saveStatePartial(updates){
+  const iso = state?.meta?.weekOf || weekInput.value; if(!iso) return;
+  try{ await weeksCol().doc(iso).set(updates,{merge:true}); }
+  catch(e){ console.warn("Firestore save failed (offline or view-only).",e); }
+}
+let unsub=null;
+function subscribe(iso){
+  if(unsub){unsub();unsub=null;} if(!iso) return;
+  unsub = weeksCol().doc(iso).onSnapshot(snap=>{
+    const base=blankWeek(); const remote=snap.exists?(snap.data()||{}):{};
+    state.meta.weekOf = iso;
+    state.settings = Object.assign({}, state.settings, remote.settings||{});
+    state.data     = Object.assign(base, remote.data||{});
+    state.details  = remote.details || state.details || {};
+    mobileStart = 0;
+    recalc();
+  });
+}
+
+/* ----------------- UI wiring ------------------ */
+document.getElementById("openSettings").onclick=()=>{
+  if(!isOwner){ alert("Sign in as an owner to edit Budget Settings."); return; }
+  document.getElementById("budgetBase").value  = state.settings.base || "smart";
+  document.getElementById("allocMethod").value = state.settings.alloc|| "proportional";
+  document.getElementById("pct_meat").value    = state.settings.pct.meat;
+  document.getElementById("pct_sea").value     = state.settings.pct.sea;
+  document.getElementById("pct_bread").value   = state.settings.pct.bread;
+  document.getElementById("pct_produce").value = state.settings.pct.produce;
+  document.getElementById("pct_pantry").value  = state.settings.pct.pantry;
+  document.getElementById("pct_dairy").value   = state.settings.pct.dairy;
+
+  document.getElementById("foodPctEnabled").checked = !!state.settings.foodPct?.enabled;
+  document.getElementById("foodPctValue").value     = state.settings.foodPct?.value ?? 75;
+  document.getElementById("foodPctValue").disabled  = !document.getElementById("foodPctEnabled").checked;
+
+  document.getElementById("settingsModal").classList.add("open");
+};
+document.getElementById("foodPctEnabled").addEventListener("input",()=>{
+  document.getElementById("foodPctValue").disabled = !document.getElementById("foodPctEnabled").checked;
+});
+document.getElementById("closeSettings").onclick=()=> document.getElementById("settingsModal").classList.remove("open");
+document.getElementById("applySettings").onclick=()=>{
+  if(!isOwner){ alert("Only owners can apply settings."); return; }
+  state.settings.base  = document.getElementById("budgetBase").value;
+  state.settings.alloc = document.getElementById("allocMethod").value;
+
+  state.settings.foodPct = {
+    enabled: document.getElementById("foodPctEnabled").checked,
+    value:   parseFloat(document.getElementById("foodPctValue").value)||0
+  };
+
+  state.settings.pct.meat    = parseFloat(document.getElementById("pct_meat").value)||0;
+  state.settings.pct.sea     = parseFloat(document.getElementById("pct_sea").value)||0;
+  state.settings.pct.bread   = parseFloat(document.getElementById("pct_bread").value)||0;
+  state.settings.pct.produce = parseFloat(document.getElementById("pct_produce").value)||0;
+  state.settings.pct.pantry  = parseFloat(document.getElementById("pct_pantry").value)||0;
+  state.settings.pct.dairy   = parseFloat(document.getElementById("pct_dairy").value)||0;
+
+  document.getElementById("settingsModal").classList.remove("open");
+  recalc(); persist(); scheduleSave();
+};
+
+document.getElementById("toggleHowto").onclick=()=>{
+  const h=document.getElementById("howto");
+  const willOpen = !(h.classList.contains("open"));
+  h.classList.toggle("open", willOpen);
+  h.style.display = willOpen ? "block" : "none";
+  document.getElementById("toggleHowto").textContent = willOpen ? "Hide Help" : "Show Help";
+};
+
+document.getElementById("newWeek").onclick=()=>{
+  if(!isOwner){ alert("Only owners can create a new blank week."); return; }
+  state.data=blankWeek(); state.details={}; persist(); recalc(); scheduleSave();
+};
+document.getElementById("saveLocal").onclick=()=>{
+  const key=prompt("Save draft as:", state.meta.weekOf || weekInput.value || "week"); if(!key) return;
+  localStorage.setItem("tulia_budget_"+key, JSON.stringify(state)); alert("Saved locally!");
+};
+document.getElementById("loadLocal").onclick=()=>{
+  const items=Object.keys(localStorage).filter(k=>k.startsWith("tulia_budget_"));
+  if(!items.length) return alert("No local saves yet.");
+  const key=prompt("Enter name:\n"+items.map(k=>k.replace("tulia_budget_","")).join("\n")); if(!key) return;
+  const raw=localStorage.getItem("tulia_budget_"+key); if(!raw) return alert("Not found.");
+  const obj=JSON.parse(raw); const base=blankWeek();
+  state={...state,...obj}; state.data=Object.assign(base,obj.data||{}); state.details=obj.details||{};
+  recalc(); persist(); scheduleSave();
+};
+document.getElementById("exportJSON").onclick=()=>{
+  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=(state.meta.weekOf||"tulia_week")+"_budget.json"; a.click(); URL.revokeObjectURL(a.href);
+};
+document.getElementById("importFile").addEventListener("change",(e)=>{
+  const f=e.target.files?.[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    try{ const obj=JSON.parse(ev.target.result);
+      const base=blankWeek();
+      state={...state,...obj}; state.data=Object.assign(base,obj.data||{}); state.details=obj.details||{};
+      recalc(); persist(); scheduleSave();
+    }catch{ alert("Invalid file"); }
+  };
+  r.readAsText(f);
+});
+document.getElementById("exportExcel").onclick=()=>{
+  const header=["Line","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday","Totals"];
+  const rows=[header]; const label=Object.fromEntries(LINES.map(l=>[l.key,l.label]));
+  for(const line of LINES){
+    if(line.type==="spacer") continue;
+    const totalText = (line.key==="proj_sales"||line.key==="actual_sales") ? effectiveRow(line.key).total : state.data[line.key].total;
+    const eff = (line.key==="proj_sales"||line.key==="actual_sales") ? effectiveRow(line.key) : state.data[line.key];
+    rows.push([label[line.key], eff.mon, eff.tue, eff.wed, eff.thu, eff.fri, eff.sat, eff.sun, totalText ]);
+  }
+  const ws=XLSX.utils.aoa_to_sheet(rows); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Week");
+  XLSX.writeFile(wb,(state.meta.weekOf||"tulia_week")+"_budget.xlsx");
+};
+function thisMondayISO(){ const d=new Date(); const mon=startOfWeekMonday(d); return toISO(mon); }
+function onWeekChange(raw){
+  if(!raw) return;
+  const chosen=parseLocalISO(raw); const mon=startOfWeekMonday(chosen); const iso=toISO(mon);
+  if(weekInput.value!==iso) weekInput.value=iso;
+  localStorage.setItem(LS_WEEK_KEY, iso);
+  state.meta.weekOf=iso;
+  mobileStart=0;
+  subscribe(iso); setHeaderDates();
+}
+weekInput.addEventListener("change",e=>onWeekChange(e.target.value));
+weekInput.addEventListener("input" ,e=>onWeekChange(e.target.value));
+
+/* -------------------- Boot -------------------- */
+function boot(){
+  load();
+  const qWeek=new URLSearchParams(location.search).get("week");
+  const initial=qWeek || localStorage.getItem(LS_WEEK_KEY) || thisMondayISO();
+  weekInput.value=initial; state.meta.weekOf=initial; setHeaderDates(); subscribe(initial);
+
+  const h=document.getElementById("howto"); if(h){ h.classList.remove("open"); h.style.display="none"; }
+  const btn=document.getElementById("toggleHowto"); if(btn) btn.textContent="Show Help";
+}
+boot();
+</script>
+</body>
+</html>
