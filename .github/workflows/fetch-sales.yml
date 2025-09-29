@@ -1,41 +1,42 @@
-name: fetch-sales
+name: Pull 7shifts sales into Firestore
 
 on:
-  workflow_dispatch:    # allow manual runs
+  workflow_dispatch:
+    inputs:
+      week_of:
+        description: 'ISO Monday for the week (YYYY-MM-DD). Leave blank for current week.'
+        required: false
   schedule:
-    # Cron is UTC in GitHub Actions.
-    # 6am/6pm Toronto ≈ 10:00 / 22:00 UTC during DST (EDT). In winter (EST) it's 11:00 / 23:00.
-    - cron: "0 10,22 * * *"
+    # 6am and 6pm America/Toronto every day
+    - cron: '0 6 * * *'
+      timezone: America/Toronto
+    - cron: '0 18 * * *'
+      timezone: America/Toronto
 
 jobs:
-  pull_and_push:
+  fetch-and-write:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    env:
+      WORKSPACE: tulia
+      COMPANY_ID: '283376'     # ← your 7shifts company id
+      LOCATION_ID: '351442'    # ← your 7shifts location id
+      FOOD_PCT_ENABLED: 'false' # just stored alongside for reference (UI controls this)
+      FOOD_PCT: '40'
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: '20'
 
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install google-cloud-firestore google-auth requests
+      - name: Install deps for script
+        run: npm i firebase-admin axios dayjs
 
-      - name: Write Firebase service account JSON
-        run: |
-          echo '${{ secrets.FIREBASE_SA_JSON }}' > $GITHUB_WORKSPACE/sa.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/sa.json" >> $GITHUB_ENV
-
-      - name: Run fetcher
+      - name: Run script
         env:
+          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
           SEVENSHIFTS_TOKEN: ${{ secrets.SEVENSHIFTS_TOKEN }}
-          COMPANY_ID: "283376"   # <- update if needed
-          LOCATION_ID: "351442"  # <- update if needed
-          WORKSPACE: "tulia"
-          LOCAL_TZ: "America/Toronto"
-        run: |
-          python scripts/fetch_7shifts_to_firestore.py
+          INPUT_WEEK_OF: ${{ github.event.inputs.week_of }}
+        run: node scripts/fetch_sales.js
