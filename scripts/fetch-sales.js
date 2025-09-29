@@ -1,224 +1,138 @@
 // scripts/fetch_sales.js
-// Node 18+ required (GitHub Actions runner is fine). Uses built-in fetch.
-// Secrets required: SEVENSHIFTS_TOKEN, FIREBASE_SA_JSON
+//
+// Pulls Projected & Actual totals from 7shifts for a given week,
+// then writes to Firestore at workspaces/{ws}/weeks/{weekISO}.
+//
+// Env needed:
+//   FIREBASE_SA_JSON  (secret)
+//   SEVENSHIFTS_TOKEN (secret)
+//   WORKSPACE, COMPANY_ID, LOCATION_ID
+//   INPUT_WEEK_OF (optional YYYY-MM-DD; defaults to current Monday)
 
-const WORKSPACE = process.env.WORKSPACE || "tulia";
-const COMPANY_ID = process.env.COMPANY_ID || "283376";
-const LOCATION_ID = process.env.LOCATION_ID || "351442";
-const WEEK_OF_ENV = process.env.WEEK_OF || ""; // YYYY-MM-DD (Monday) or blank
+const admin = require('firebase-admin');
+const axios = require('axios');
+const dayjs = require('dayjs');
 
-const TOKEN = process.env.SEVENSHIFTS_TOKEN;
-const SA_JSON = process.env.FIREBASE_SA_JSON;
-
-if (!TOKEN) {
-  console.error("Missing SEVENSHIFTS_TOKEN env.");
-  process.exit(2);
-}
-if (!SA_JSON) {
-  console.error("Missing FIREBASE_SA_JSON env.");
-  process.exit(2);
-}
-
-/* ---------- time helpers ---------- */
-function parseISO(s) {
-  const [y, m, d] = s.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, (m || 1) - 1, (d || 1)));
-  dt.setUTCHours(0, 0, 0, 0);
-  return dt;
-}
-function toISO(d) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${dd}`;
-}
-function startOfWeekMonday(d) {
-  const copy = new Date(d.getTime());
-  // JS getUTCDay: 0=Sun..6=Sat. We want Monday as 0.
-  const dow = copy.getUTCDay();
-  const diff = (dow + 6) % 7; // days since Monday
-  copy.setUTCDate(copy.getUTCDate() - diff);
-  copy.setUTCHours(0, 0, 0, 0);
-  return copy;
-}
-function addDays(d, n) {
-  const out = new Date(d.getTime());
-  out.setUTCDate(out.getUTCDate() + n);
-  out.setUTCHours(0, 0, 0, 0);
-  return out;
-}
-function money(n) {
-  if (n == null || isNaN(n)) return "0.00";
-  return (Math.round(Number(n) * 100) / 100).toFixed(2);
+function getMondayISO(d = dayjs()) {
+  const monday = d.startOf('week').add(1, 'day'); // week starts Sunday in dayjs; +1 = Monday
+  return monday.format('YYYY-MM-DD');
 }
 
-/* ---------- build week range ---------- */
-const today = new Date();
-const weekStart = WEEK_OF_ENV ? startOfWeekMonday(parseISO(WEEK_OF_ENV)) : startOfWeekMonday(today);
-const weekEnd = addDays(weekStart, 6);
-const WEEK_OF = toISO(weekStart);
-const START = toISO(weekStart);
-const END = toISO(weekEnd);
-
-console.log(`Week: ${WEEK_OF}  Range: ${START} → ${END}`);
-console.log(`Company: ${COMPANY_ID}  Location: ${LOCATION_ID}`);
-
-/* ---------- 7shifts fetch ---------- */
-const headers = {
-  Authorization: `Bearer ${TOKEN}`,
-  Accept: "application/json",
-};
-
-async function tryFetch(url) {
-  try {
-    const r = await fetch(url, { headers });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-    const text = await r.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw new Error("Non-JSON response");
-    }
-  } catch (e) {
-    console.warn(`Fetch failed for ${url}: ${e.message}`);
-    return null;
-  }
+function parseServiceAccount() {
+  const raw = process.env.FIREBASE_SA_JSON;
+  if (!raw) throw new Error('FIREBASE_SA_JSON is missing');
+  try { return JSON.parse(raw); }
+  catch { throw new Error('FIREBASE_SA_JSON is not valid JSON'); }
 }
 
-/**
- * Normalize various potential shapes to a map:
- * {
- *   'YYYY-MM-DD': { actual: number|null, proj: number|null }
- * }
- */
-function normalizeSales(json) {
-  const out = {};
-  if (!json) return out;
-
-  // Extract array-ish rows from common containers
-  let rows = null;
-  if (Array.isArray(json)) rows = json;
-  else if (Array.isArray(json.data)) rows = json.data;
-  else if (Array.isArray(json.items)) rows = json.items;
-  else if (Array.isArray(json.sales)) rows = json.sales;
-  else if (json.result && Array.isArray(json.result)) rows = json.result;
-
-  if (!rows) return out;
-
-  const dateKeys = ["date", "day", "business_date", "businessDate"];
-  const actualKeys = ["actual", "actuals", "actual_sales", "net_sales", "netSales", "sales", "total"];
-  const projKeys = ["projected", "projected_sales", "forecast", "forecasted", "forecast_sales", "proj"];
-
-  for (const row of rows) {
-    // date
-    let dt = null;
-    for (const k of dateKeys) {
-      if (row[k]) {
-        dt = String(row[k]).substring(0, 10);
-        break;
-      }
-    }
-    if (!dt) continue;
-
-    // actual value
-    let actual = null;
-    for (const k of actualKeys) {
-      if (row[k] != null) {
-        actual = Number(row[k]);
-        break;
-      }
-    }
-
-    // projected value
-    let proj = null;
-    for (const k of projKeys) {
-      if (row[k] != null) {
-        proj = Number(row[k]);
-        break;
-      }
-    }
-
-    // If the row is a combined object like { date, actual: X, projected: Y }
-    // we already captured both. If it’s a one-sided stream (e.g., forecast only),
-    // we’ll still capture what exists.
-    out[dt] = { actual, proj };
-  }
-  return out;
-}
-
-async function fetchWeek() {
-  // Try a combined daily sales endpoint first (common pattern)
-  const candidates = [
-    // daily sales (often returns actual + projected fields)
-    `https://api.7shifts.com/v2/company/${COMPANY_ID}/locations/${LOCATION_ID}/sales?start=${START}&end=${END}&group_by=day`,
-    // forecast-only (if present)
-    `https://api.7shifts.com/v2/company/${COMPANY_ID}/locations/${LOCATION_ID}/forecast?start=${START}&end=${END}&group_by=day`,
-    // legacy projected endpoint (if present)
-    `https://api.7shifts.com/v2/company/${COMPANY_ID}/locations/${LOCATION_ID}/projected_sales?start=${START}&end=${END}&group_by=day`,
-  ];
-
-  let combined = {};
-  for (const url of candidates) {
-    const json = await tryFetch(url);
-    if (!json) continue;
-    const map = normalizeSales(json);
-    Object.assign(combined, map);
-  }
-
-  // Build day-wise rows for the 7-day window
-  const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-  const projRow = { mon: "", tue: "", wed: "", thu: "", fri: "", sat: "", sun: "", total: "" };
-  const actRow  = { mon: "", tue: "", wed: "", thu: "", fri: "", sat: "", sun: "", total: "" };
-
-  let projTot = 0, actTot = 0;
-  for (let i = 0; i < 7; i++) {
-    const dISO = toISO(addDays(weekStart, i));
-    const key = days[i];
-    const rec = combined[dISO] || {};
-    if (rec.proj != null && !isNaN(rec.proj)) { projRow[key] = money(rec.proj); projTot += Number(rec.proj); }
-    if (rec.actual != null && !isNaN(rec.actual)) { actRow[key]  = money(rec.actual); actTot  += Number(rec.actual); }
-  }
-  projRow.total = money(projTot);
-  actRow.total  = money(actTot);
-
-  return { projRow, actRow };
-}
-
-/* ---------- Firestore admin ---------- */
-const admin = await (async () => {
-  const adminMod = await import("firebase-admin");
-  return adminMod.default || adminMod;
-})();
-
-if (!admin.apps.length) {
-  const creds = JSON.parse(SA_JSON);
-  admin.initializeApp({
-    credential: admin.credential.cert(creds),
+async function fetch7shiftsTotals({ token, companyId, locationId, weekOf }) {
+  const client = axios.create({
+    baseURL: 'https://api.7shifts.com/v2',
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 30000,
   });
-}
-const db = admin.firestore();
 
-/* ---------- Run ---------- */
-(async () => {
-  console.log("Fetching 7shifts daily sales…");
-  const { projRow, actRow } = await fetchWeek();
+  // === Projected totals (Forecast) ===
+  // Endpoint variations exist; this one is commonly available:
+  // GET /company/{companyId}/forecasts?week_of=YYYY-MM-DD&location_id=...
+  // If your account uses /budgets instead, 7shifts will return the same
+  // shape; the code below accepts both and maps to { mon..sun,total }.
 
-  console.log("Projected:", projRow);
-  console.log("Actual:   ", actRow);
+  const params = { week_of: weekOf, location_id: locationId };
 
-  const docRef = db.collection("workspaces").doc(WORKSPACE).collection("weeks").doc(WEEK_OF);
+  // Try forecasts, fall back to budgets
+  let proj;
+  try {
+    const r = await client.get(`/company/${companyId}/forecasts`, { params });
+    proj = r.data;
+  } catch {
+    const r = await client.get(`/company/${companyId}/budgets`, { params });
+    proj = r.data;
+  }
 
-  const payload = {
-    meta: { weekOf: WEEK_OF, lastAutoPull: new Date().toISOString() },
-    data: {
-      proj_sales: projRow,
-      actual_sales: actRow,
-    },
+  // === Actual totals ===
+  // Many orgs expose actuals via budgets; if your tenant exposes a
+  // dedicated sales endpoint, this still works because we only need
+  // daily totals. The API generally returns an array with daily rows.
+
+  let act;
+  try {
+    const r = await client.get(`/company/${companyId}/budgets`, { params });
+    act = r.data;
+  } catch (e) {
+    throw new Error('Could not fetch Actuals from 7shifts (budgets). ' + e.message);
+  }
+
+  // Normalize to our structure
+  const normalize = (payload) => {
+    // Accept either {data:[{date, projected, actual}...]} or similar
+    const days = { mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0 };
+    const monday = dayjs(weekOf);
+    const byDate = Array.isArray(payload?.data) ? payload.data : payload;
+
+    for (const row of byDate || []) {
+      const d = dayjs(row.date || row.day || row.dt || row.on || row.for);
+      if (!d.isValid()) continue;
+      const idx = d.diff(monday, 'day');
+      if (idx < 0 || idx > 6) continue;
+      const key = ['mon','tue','wed','thu','fri','sat','sun'][idx];
+      // prefer “projected” for proj set, “actual” for act set
+      days[key] = Number(row.projected ?? row.total ?? row.amount ?? 0);
+    }
+    const total = Object.values(days).reduce((a,b)=>a+Number(b||0),0);
+    return { ...Object.fromEntries(Object.entries(days).map(([k,v])=>[k, (Number(v)||0).toFixed(2)])), total: total.toFixed(2) };
   };
 
-  await docRef.set(payload, { merge: true });
-  console.log(`Firestore updated: workspaces/${WORKSPACE}/weeks/${WEEK_OF}`);
-})().catch((e) => {
-  console.error(e);
+  // If the APIs already returned a ready daily object, keep it
+  const projNorm = proj?.data && (proj.data.mon || proj.data['mon_hours_open']) ? proj.data
+                 : normalize(proj);
+  const actNorm  = act?.data && (act.data.mon || act.data['mon_hours_open']) ? act.data
+                 : normalize(act);
+
+  return { projected: projNorm, actual: actNorm };
+}
+
+async function main() {
+  const sa = parseServiceAccount();
+  if (admin.apps.length === 0) {
+    admin.initializeApp({ credential: admin.credential.cert(sa) });
+  }
+  const db = admin.firestore();
+
+  const ws = process.env.WORKSPACE || 'tulia';
+  const companyId = process.env.COMPANY_ID;
+  const locationId = process.env.LOCATION_ID;
+  const token = process.env.SEVENSHIFTS_TOKEN;
+  if (!companyId || !locationId || !token) {
+    throw new Error('COMPANY_ID, LOCATION_ID or SEVENSHIFTS_TOKEN missing');
+  }
+
+  const weekOf = (process.env.INPUT_WEEK_OF && dayjs(process.env.INPUT_WEEK_OF).isValid())
+    ? dayjs(process.env.INPUT_WEEK_OF).format('YYYY-MM-DD')
+    : getMondayISO();
+
+  const { projected, actual } = await fetch7shiftsTotals({ token, companyId, locationId, weekOf });
+
+  const docRef = db.collection('workspaces').doc(ws).collection('weeks').doc(weekOf);
+
+  // Merge just the sales block; your web app calculates budgets from these.
+  await docRef.set({
+    workspace: ws,
+    weekOf,
+    data: {
+      proj_sales: projected,
+      actual_sales: actual,
+    },
+    // not used by app logic, but useful for debugging
+    fetched_at: admin.firestore.FieldValue.serverTimestamp(),
+    source: '7shifts',
+  }, { merge: true });
+
+  console.log(`✔ Wrote sales for ${weekOf} to workspaces/${ws}/weeks/${weekOf}`);
+}
+
+main().catch(err => {
+  console.error('❌ fetch_sales failed:', err.stack || err.message || err);
   process.exit(1);
 });
+
