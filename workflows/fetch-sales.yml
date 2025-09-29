@@ -1,0 +1,28 @@
+name: Pull 7shifts sales to Firestore
+
+on:
+  schedule:
+    # 6am & 6pm Toronto time. We include both EST and EDT UTC offsets.
+    - cron: "0 10,22 * * *"  # 6am/6pm EDT (UTC-4)
+    - cron: "0 11,23 * * *"  # 6am/6pm EST (UTC-5)
+  workflow_dispatch: {}
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps
+        run: npm i --no-audit --no-fund
+      - name: Run pull script
+        env:
+          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
+          SEVENSHIFTS_TOKEN: ${{ secrets.SEVENSHIFTS_TOKEN }}
+          COMPANY_ID: ${{ vars.COMPANY_ID }}
+          LOCATION_ID: ${{ vars.LOCATION_ID }}
+          WORKSPACE: ${{ vars.WORKSPACE }}
+          TIMEZONE: ${{ vars.TIMEZONE }}
+        run: node scripts/pull-7shifts-sales.mjs
