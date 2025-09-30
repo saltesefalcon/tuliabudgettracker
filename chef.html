@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Chef View — Tulia Budget</title>
+
+<style>
+:root{--bg:#0f172a;--panel:#111827;--ink:#e5e7eb;--muted:#9ca3af;--accent:#22c55e;--warn:#ef4444;--brand:#0ea5e9}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+.wrap{max-width:980px;margin:24px auto;padding:16px}
+h1{margin:0 0 6px;font-size:1.6rem}
+.sub{color:var(--muted);margin-bottom:14px}
+.panel{background:var(--panel);border:1px solid #1f2937;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:14px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.toolbar>*{margin-right:6px}
+input[type="date"],select,button{border:1px solid #374151;border-radius:10px;background:#0b1220;color:var(--ink);padding:8px 10px}
+button{cursor:pointer}
+button.primary{background:var(--brand);border-color:#0284c7;color:#fff}
+button.ghost{background:transparent}
+.badge{padding:6px 10px;border-radius:999px;background:#111827;border:1px solid #1f2937}
+.badge b{margin-right:6px}
+.badge.under{border-color:#14532d;background:#0f1a12}
+.badge.over{border-color:#7f1d1d;background:#1b1212}
+.weekrange{margin-left:auto;font-weight:800}
+
+.chips{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.chips .badge strong{margin-right:6px}
+
+.rowcard{margin-top:14px;border:1px solid #1f2937;border-radius:12px;overflow:hidden}
+.rowhead{display:flex;justify-content:space-between;align-items:center;background:#0b1220;padding:10px 12px}
+.rowhead .dow{font-weight:700}
+.rowbody{padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.slot{border:1px dashed #374151;border-radius:12px;padding:10px}
+.slot h4{margin:0 0 6px;font-size:1rem}
+.kv{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:.95rem;margin:6px 0}
+.kv b{color:var(--ink)}
+.kv .ou{font-weight:700}
+.kv .ou.over{color:var(--warn)}
+.kv .ou.under{color:var(--accent)}
+.slot .actions{display:flex;gap:8px;margin-top:8px}
+.lock{margin-left:8px}
+.lock.ok{border-color:#14532d;color:#22c55e}
+.lock.no{border-color:#7f1d1d;color:#ef4444}
+
+.small{font-size:.92rem}
+
+@media (max-width:760px){
+  .rowbody{grid-template-columns:1fr}
+}
+
+/* ---------- Modal (Sign-in) ---------- */
+.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);z-index:9990}
+.modal.open{display:flex}
+.modal .card{background:var(--panel);border:1px solid #1f2937;border-radius:14px;padding:16px;width:min(460px,92vw)}
+
+/* ---------- Popover (Deliveries) ---------- */
+.shade{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;display:none}
+.pop{position:fixed;display:none;z-index:9999;background:var(--panel);border:1px solid #1f2937;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.55);width:min(760px,95vw);min-width:520px;padding:14px;top:50vh;left:50vw;transform:translate(-50%,-50%)}
+.pop header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;cursor:move}
+.pop .grid-h,.pop .grid{display:grid;grid-template-columns:120px 1fr 1fr 44px;gap:8px;align-items:center}
+.pop .grid-h{color:var(--muted);font-size:.85rem;margin-bottom:4px}
+.pop .foot{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.mini{padding:8px 12px}
+.total{background:#0b1220;border:1px solid #374151;padding:6px 10px;border-radius:10px}
+.note{color:var(--muted);font-size:.9rem;margin-bottom:8px}
+</style>
+
+<!-- Firebase (compat) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <h1>Chef View</h1>
+  <div class="sub">Pick a week, see Meat &amp; Seafood budgets and add deliveries. Updates sync with the main tracker.</div>
+
+  <div class="panel">
+    <div class="toolbar">
+      <label>Week of
+        <input id="weekOf" type="date" step="7" min="2000-01-03"/>
+      </label>
+      <div class="weekrange" id="weekRange"></div>
+      <span class="lock badge no" id="lockBadge">View-only</span>
+      <span style="flex:1"></span>
+      <button id="btnSignIn" class="ghost">Sign In</button>
+      <button id="btnSignOut" class="ghost" style="display:none">Sign Out</button>
+    </div>
+
+    <div class="chips">
+      <span class="badge"><strong>Weekly Budget:</strong> <span id="chipBudget">$0.00</span></span>
+      <span class="badge"><strong>Spends:</strong> <span id="chipSpend">$0.00</span></span>
+      <span class="badge" id="chipNet"><strong>Net O/U:</strong> <span id="chipNetVal">$0.00</span></span>
+    </div>
+
+    <div id="days"></div>
+  </div>
+</div>
+
+<!-- Sign-in modal -->
+<div class="modal" id="authModal" aria-modal="true" role="dialog" aria-label="Sign In">
+  <div class="card">
+    <h3 style="margin-top:0">Sign In</h3>
+    <div style="display:grid;gap:10px">
+      <label>Email <input id="authEmail" type="email" placeholder="owner@example.com"/></label>
+      <label>Password <input id="authPass" type="password" placeholder="••••••••"/></label>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="ghost" id="authCancel">Cancel</button>
+        <button class="primary" id="authLogin">Sign In</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Deliveries popover -->
+<div id="shade" class="shade"></div>
+<div id="popover" class="pop"></div>
+
+<script>
+/* ---------------- Firebase init ---------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyBtTQJDlqUfRh46H7wLM7UxPxQup0DG40o",
+  authDomain: "tulia-budget-tracker.firebaseapp.com",
+  projectId: "tulia-budget-tracker",
+  storageBucket: "tulia-budget-tracker.firebasestorage.app",
+  messagingSenderId: "810720369340",
+  appId: "1:810720369340:web:4ab200c745be7df307ceb9"
+};
+// support multiple owners
+const OWNER_UIDS = [
+  "TCNpi8zcTQgtIvfKHOkClgBLnsk1",
+  "K2dbWGjfmCM2lkzRfkIQtdqrlaH2"
+];
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+/* ---------------- Helpers ---------------- */
+const URL_WS = new URLSearchParams(location.search).get("ws") || "tulia"; // align with main tracker
+const weeksCol = () => db.collection("workspaces").doc(URL_WS).collection("weeks");
+
+const DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
+const DAYNAME  = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const DAYSHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+function parseLocalISO(s){ if(!s) return null; const [y,m,d]=s.split("-").map(Number); const dt=new Date(y,(m||1)-1,(d||1)); dt.setHours(0,0,0,0); return dt; }
+function toISO(d){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), dd=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${dd}`; }
+function startOfWeekMonday(d){ const day=d.getDay(); const diff=(day+6)%7; const out=new Date(d); out.setDate(d.getDate()-diff); out.setHours(0,0,0,0); return out; }
+function addDays(d,n){ const out=new Date(d); out.setDate(d.getDate()+n); out.setHours(0,0,0,0); return out; }
+function monthShort(d){ return d.toLocaleString(undefined,{month:"short"}) }
+function ordinal(n){ const s=["th","st","nd","rd"], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]) }
+function formatWeekRange(mon){ const sun=addDays(mon,6); const same=mon.getMonth()===sun.getMonth(); const left=`${monthShort(mon)} ${mon.getDate()}`; const right=`${same?sun.getDate():monthShort(sun)+" "+sun.getDate()}, ${sun.getFullYear()}`; return `${left}–${right}`; }
+
+function num(v){ const n=parseFloat(v); return isNaN(n)?0:n; }
+function money(n){ return (Math.round(n*100)/100).toFixed(2); }
+function sumDays(row){ return DAYS.reduce((a,d)=>a+num(row?.[d]),0); }
+function blankRow(){ return {mon:"",tue:"",wed:"",thu:"",fri:"",sat:"",sun:"",total:""} }
+function ensureRow(o,k){ if(!o[k]) o[k]=blankRow(); return o[k]; }
+
+/* --------------- Local state --------------- */
+let isOwner=false;
+let unsub=null;
+let state = {
+  meta:{weekOf:""},
+  data:{},
+  details:{},
+  settings:{ base:"smart", alloc:"proportional",
+    pct:{ meat:25, sea:15, bread:10, produce:20, pantry:15, dairy:15 },
+    suppliers:{meat:[],sea:[],bread:[],produce:[],pantry:[],dairy:[]}
+  }
+};
+
+/* --------------- Auth UI --------------- */
+const btnSignIn  = document.getElementById("btnSignIn");
+const btnSignOut = document.getElementById("btnSignOut");
+const lockBadge  = document.getElementById("lockBadge");
+const authModal  = document.getElementById("authModal");
+
+btnSignIn.onclick  = ()=> authModal.classList.add("open");
+document.getElementById("authCancel").onclick = ()=> authModal.classList.remove("open");
+document.getElementById("authLogin").onclick  = async ()=>{
+  const email=(document.getElementById("authEmail").value||"").trim();
+  const pass =(document.getElementById("authPass").value||"").trim();
+  if(!email||!pass) return alert("Enter email & password.");
+  try{ await firebase.auth().signInWithEmailAndPassword(email,pass); authModal.classList.remove("open"); }
+  catch(e){ alert(e.message||e.code); }
+};
+btnSignOut.onclick = ()=> firebase.auth().signOut();
+
+firebase.auth().onAuthStateChanged(user => {
+  const isAuthed = !!user;
+  isOwner = !!(user && OWNER_UIDS.includes(user.uid));
+
+  // Toggle buttons by auth status
+  btnSignIn.style.display  = isAuthed ? "none" : "inline-block";
+  btnSignOut.style.display = isAuthed ? "inline-block" : "none";
+
+  // Badge
+  lockBadge.textContent = isOwner ? "Editing (Owner)" : (isAuthed ? "Signed-in" : "View-only");
+  lockBadge.classList.toggle("ok", isOwner);
+  lockBadge.classList.toggle("no", !isOwner);
+
+  // Re-subscribe after auth changes (in case reads require auth)
+  if (unsub) { unsub(); unsub = null; }
+  if (state.meta.weekOf) subscribeWeek(state.meta.weekOf);
+});
+
+/* --------------- Deliveries popover --------------- */
+const shade = document.getElementById("shade");
+const pop   = document.getElementById("popover");
+let dragging=false, dragDX=0, dragDY=0;
+
+function supplierOptionsFor(kind){
+  const list=state?.settings?.suppliers?.[kind];
+  return (Array.isArray(list)&&list.length?list:["Other"]);
+}
+
+function centerPop(){ pop.style.top="50vh"; pop.style.left="50vw"; pop.style.transform="translate(-50%,-50%)"; }
+function makeDraggable(){
+  const head=pop.querySelector("header"); if(!head) return;
+  head.addEventListener("pointerdown",(e)=>{
+    dragging=true;
+    const r=pop.getBoundingClientRect();
+    pop.style.transform="none"; pop.style.left=r.left+"px"; pop.style.top=r.top+"px";
+    dragDX=e.clientX-r.left; dragDY=e.clientY-r.top;
+    window.addEventListener("pointermove", onDragMove, {passive:false});
+    window.addEventListener("pointerup", onDragEnd);
+  });
+}
+function onDragMove(e){ if(!dragging) return; e.preventDefault(); pop.style.left=(e.clientX-dragDX)+"px"; pop.style.top=(e.clientY-dragDY)+"px"; }
+function onDragEnd(){ dragging=false; window.removeEventListener("pointermove", onDragMove); window.removeEventListener("pointerup", onDragEnd); }
+function closePop(){ pop.style.display="none"; shade.style.display="none"; pop.innerHTML=""; }
+
+/** Open editor; if readOnly=true, inputs disabled & Save/Add hidden */
+function openDeliveriesEditor(lineKey, dayKey, title, supplierKind, readOnly=false){
+  if(!state.details[lineKey]) state.details[lineKey]={};
+  if(!Array.isArray(state.details[lineKey][dayKey])) state.details[lineKey][dayKey]=[];
+
+  const items = state.details[lineKey][dayKey];
+  const dayTotal=num(state.data[lineKey]?.[dayKey]);
+
+  // For empty view: show one placeholder row so structure is visible
+  if(items.length===0 && dayTotal>0) items.push({amount:String(dayTotal),supplier:supplierOptionsFor(supplierKind)[0]||"Other",invoice:""});
+  if(items.length===0) items.push({amount:"",supplier:supplierOptionsFor(supplierKind)[0]||"Other",invoice:""});
+
+  const opts = supplierOptionsFor(supplierKind).map(s=>`<option value="${s}">${s}</option>`).join("");
+
+  pop.innerHTML = `
+    <header>
+      <div><strong>${title}</strong> · ${dayKey.toUpperCase()}</div>
+      <button id="popClose" class="ghost">Close</button>
+    </header>
+    ${readOnly ? `<div class="note">Viewing deliveries (read-only).</div>` : ``}
+    <div class="grid-h"><div>Amount</div><div>Supplier</div><div>Invoice #</div><div></div></div>
+    <div id="rows" class="grid"></div>
+    <div class="foot">
+      <div>${readOnly?``:`<button id="addLine" class="mini">Add Line</button>`}</div>
+      <div class="total">Total: $<span id="tot">0.00</span></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+      <button id="cancel" class="ghost">Close</button>
+      ${readOnly?``:`<button id="save" class="primary">Save</button>`}
+    </div>
+  `;
+
+  function redraw(){
+    const rows=pop.querySelector("#rows"); rows.innerHTML="";
+    items.forEach((it,idx)=>{
+      const row=document.createElement("div"); row.style.display="contents";
+      row.innerHTML=`
+        <input type="number" step="0.01" inputmode="decimal" placeholder="0.00" value="${it.amount??""}" ${readOnly?"disabled":""}>
+        <select ${readOnly?"disabled":""}>${opts}</select>
+        <input type="text" placeholder="e.g. 12345" value="${it.invoice??""}" ${readOnly?"disabled":""}>
+        ${readOnly?`<span></span>`:`<button class="ghost" title="Remove">×</button>`}
+      `;
+      const [amt,sel,inv,del]=row.children;
+      sel.value = it.supplier || supplierOptionsFor(supplierKind)[0] || "Other";
+      if(!readOnly){
+        amt.addEventListener("input", ()=>{ it.amount=amt.value; updateTotal(); });
+        sel.addEventListener("input", ()=>{ it.supplier=sel.value; });
+        inv.addEventListener("input", ()=>{ it.invoice=inv.value; });
+        del.addEventListener("click", ()=>{
+          items.splice(idx,1);
+          if(items.length===0) items.push({amount:"",supplier:supplierOptionsFor(supplierKind)[0]||"Other",invoice:""});
+          redraw(); updateTotal();
+        });
+      }
+      rows.appendChild(row);
+    });
+  }
+  function updateTotal(){
+    const t=items.reduce((a,it)=>a+(parseFloat(it.amount)||0),0);
+    pop.querySelector("#tot").textContent=money(t);
+  }
+
+  redraw(); updateTotal();
+
+  if(!readOnly){
+    pop.querySelector("#addLine").onclick = ()=>{ items.push({amount:"",supplier:supplierOptionsFor(supplierKind)[0]||"Other",invoice:""}); redraw(); updateTotal(); };
+    const saveBtn = pop.querySelector("#save");
+    saveBtn.onclick = async ()=>{
+      const cleaned = items.map(it=>({amount:String(it.amount||""),supplier:it.supplier||"Other",invoice:it.invoice||""}))
+                           .filter(it=>(parseFloat(it.amount)||0)>0);
+      state.details[lineKey][dayKey]=cleaned;
+      const total = cleaned.reduce((a,it)=>a+(parseFloat(it.amount)||0),0);
+      ensureRow(state.data, lineKey)[dayKey] = money(total);
+      ensureRow(state.data, lineKey).total   = money(sumDays(state.data[lineKey]));
+      await weeksCol().doc(state.meta.weekOf).set({ data:state.data, details:state.details }, { merge:true });
+      render(); closePop();
+    };
+  }
+  pop.querySelector("#cancel").onclick  = closePop;
+  pop.querySelector("#popClose").onclick= closePop;
+
+  centerPop(); pop.style.display="block"; shade.style.display="block"; makeDraggable();
+}
+
+/* --------------- Week picker --------------- */
+function setHeaderDates(){
+  const iso = state.meta.weekOf;
+  const mon = iso ? parseLocalISO(iso) : null;
+  document.getElementById("weekRange").textContent = mon ? formatWeekRange(mon) : "";
+}
+function thisMondayISO(){ const d=new Date(); const mon=startOfWeekMonday(d); return toISO(mon); }
+const weekInput = document.getElementById("weekOf");
+weekInput.addEventListener("change", e=> changeWeek(e.target.value));
+weekInput.addEventListener("input",  e=> changeWeek(e.target.value));
+
+function changeWeek(raw){
+  if(!raw) return;
+  const chosen=parseLocalISO(raw); const mon=startOfWeekMonday(chosen); const iso=toISO(mon);
+  if(weekInput.value!==iso) weekInput.value=iso;
+  state.meta.weekOf=iso; setHeaderDates();
+  subscribeWeek(iso);
+}
+
+/* --------------- Subscribe to Firestore --------------- */
+function subscribeWeek(iso){
+  if(unsub){ unsub(); unsub=null; }
+  state.meta.weekOf = iso;
+  unsub = weeksCol().doc(iso).onSnapshot(snap=>{
+    const remote = snap.exists ? (snap.data()||{}) : {};
+    state.settings = Object.assign(state.settings, remote.settings||{});
+    state.data     = Object.assign({}, state.data, remote.data||{});
+    state.details  = Object.assign({}, state.details, remote.details||{});
+    render();
+  });
+}
+
+/* --------------- Rendering --------------- */
+const daysEl = document.getElementById("days");
+
+function dailyOU(budgetRow, purchRow){
+  const out={}; let tot=0;
+  for(const d of DAYS){ const v=num(budgetRow?.[d]) - num(purchRow?.[d]); out[d]=v; tot+=v; }
+  out.total=tot; return out;
+}
+function cumulative(arrayOfDaily){
+  const out=[]; let run=0;
+  for(let i=0;i<7;i++){ run += arrayOfDaily[i]; out[i]=run; }
+  return out;
+}
+
+function render(){
+  setHeaderDates();
+
+  const meatBud = ensureRow(state.data, "meat_budget");
+  const seaBud  = ensureRow(state.data, "seafood_budget");
+  const meatPur = ensureRow(state.data, "meat_purch");
+  const seaPur  = ensureRow(state.data, "seafood_purch");
+
+  const meatOU = dailyOU(meatBud, meatPur);
+  const seaOU  = dailyOU(seaBud,  seaPur);
+
+  const meatDaily = DAYS.map(d=> num(meatOU[d]));
+  const seaDaily  = DAYS.map(d=> num(seaOU[d]));
+  const meatCum   = cumulative(meatDaily);
+  const seaCum    = cumulative(seaDaily);
+
+  const weeklyBudget = sumDays(meatBud) + sumDays(seaBud);
+  const weeklySpend  = sumDays(meatPur) + sumDays(seaPur);
+  const net          = weeklyBudget - weeklySpend;
+
+  document.getElementById("chipBudget").textContent = "$"+money(weeklyBudget);
+  document.getElementById("chipSpend").textContent  = "$"+money(weeklySpend);
+  document.getElementById("chipNetVal").textContent = "$"+money(net);
+  const chipNet = document.getElementById("chipNet");
+  chipNet.classList.remove("over","under");
+  if(net<0) chipNet.classList.add("over"); else if(net>0) chipNet.classList.add("under");
+
+  const mon = state.meta.weekOf ? parseLocalISO(state.meta.weekOf) : null;
+  daysEl.innerHTML="";
+
+  for(let i=0;i<7;i++){
+    const dayKey=DAYS[i];
+    const label = mon ? `${DAYNAME[i]} — ${DAYSHORT[i]} ${ordinal(addDays(mon,i).getDate())}` : DAYNAME[i];
+
+    const mb= num(meatBud[dayKey]); const ms=num(meatPur[dayKey]); const mo=num(meatOU[dayKey]);
+    const sb= num(seaBud [dayKey]); const ss=num(seaPur [dayKey]); const so=num(seaOU[dayKey]);
+    const mcu = meatCum[i]; const scu = seaCum[i];
+
+    const card=document.createElement("div"); card.className="rowcard";
+    card.innerHTML = `
+      <div class="rowhead"><div class="dow">${label}</div></div>
+      <div class="rowbody">
+        <div class="slot">
+          <h4>Meat</h4>
+          <div class="kv small">
+            Budget: <b>$${money(mb)}</b>
+            <span>•</span>
+            Spent: <b>$${money(ms)}</b>
+            <span>•</span>
+            O/U: <b class="ou ${mo<0?"over":mo>0?"under":""}">$${money(mo)}</b>
+            <span>•</span>
+            Accumulated O/U: <b class="ou ${mcu<0?"over":mcu>0?"under":""}">$${money(mcu)}</b>
+          </div>
+          <div class="actions">
+            <button class="primary">Meat Deliveries</button>
+          </div>
+        </div>
+        <div class="slot">
+          <h4>Seafood</h4>
+          <div class="kv small">
+            Budget: <b>$${money(sb)}</b>
+            <span>•</span>
+            Spent: <b>$${money(ss)}</b>
+            <span>•</span>
+            O/U: <b class="ou ${so<0?"over":so>0?"under":""}">$${money(so)}</b>
+            <span>•</span>
+            Accumulated O/U: <b class="ou ${scu<0?"over":scu>0?"under":""}">$${money(scu)}</b>
+          </div>
+          <div class="actions">
+            <button class="primary">Seafood Deliveries</button>
+          </div>
+        </div>
+      </div>
+    `;
+    const [meatBtn, seaBtn] = card.querySelectorAll(".actions button");
+    meatBtn?.addEventListener("click", ()=> openDeliveriesEditor("meat_purch", dayKey, "Meat Deliveries", "meat", !isOwner));
+    seaBtn ?.addEventListener("click", ()=> openDeliveriesEditor("seafood_purch", dayKey, "Seafood Deliveries", "sea", !isOwner));
+    daysEl.appendChild(card);
+  }
+}
+
+/* --------------- Boot --------------- */
+function boot(){
+  const iso = toISO(startOfWeekMonday(new Date()));
+  weekInput.value = iso;
+  state.meta.weekOf = iso;
+  setHeaderDates();
+  subscribeWeek(iso);
+}
+boot();
+</script>
+</body>
+</html>
