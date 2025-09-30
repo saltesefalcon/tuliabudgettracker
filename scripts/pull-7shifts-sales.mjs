@@ -1,168 +1,154 @@
 // scripts/pull-7shifts-sales.mjs
-// Pull daily Projected & Actual sales from 7shifts and upsert to Firestore
-// Uses: FIREBASE_SA_JSON (secret), SEVENSHIFTS_TOKEN (secret),
-//       COMPANY_ID, LOCATION_ID, WORKSPACE, TIMEZONE (repository variables)
+//
+// Pulls Projected & Actual totals from 7shifts for a given week,
+// then writes to Firestore at workspaces/{WORKSPACE}/weeks/{weekISO}.
+//
+// ENV (set via GitHub Secrets/Variables or local):
+//   FIREBASE_SA_JSON      (secret)  -> the full service account JSON string
+//   SEVENSHIFTS_TOKEN     (secret)  -> OAuth2 access token ("Bearer ...")
+//   COMPANY_ID            (var)     -> your 7shifts company id
+//   LOCATION_ID           (var)     -> your 7shifts location id
+//   WORKSPACE             (var)     -> e.g. "tulia"  (defaults to "tulia")
+//   INPUT_WEEK_OF         (optional)-> any date in the target week (YYYY-MM-DD)
+//   RUN_PREV_WEEK         (optional)-> "true" to also refresh the previous week
+//   SALES_ARE_DOLLARS     (optional)-> "true" if your API returns dollars (skip /100)
+//
+// CLI override: --week=YYYY-MM-DD  (any date in target week)
 
-import { initializeApp, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
-import { DateTime } from "luxon";
+import axios from "axios";
+import admin from "firebase-admin";
 
-const {
-  FIREBASE_SA_JSON,
-  SEVENSHIFTS_TOKEN,
-  COMPANY_ID,
-  LOCATION_ID,
-  WORKSPACE = "tulia",
-  TIMEZONE = "America/Toronto",
-} = process.env;
+// --- Helpers ---
+const DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
+function pad(n){ return String(n).padStart(2,"0"); }
+function toISO(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function mondayOf(dateStr){ 
+  const d = dateStr ? new Date(dateStr) : new Date();
+  const day = d.getDay();              // 0 Sun..6 Sat
+  const diff = (day + 6) % 7;          // days since Monday
+  d.setDate(d.getDate() - diff);
+  d.setHours(0,0,0,0);
+  return d;
+}
+function addDays(d, n){ const x = new Date(d); x.setDate(x.getDate()+n); x.setHours(0,0,0,0); return x; }
+function money(n){ return (Math.round(n*100)/100).toFixed(2); }
 
-if (!FIREBASE_SA_JSON) throw new Error("FIREBASE_SA_JSON missing");
-if (!SEVENSHIFTS_TOKEN) throw new Error("SEVENSHIFTS_TOKEN missing");
-if (!COMPANY_ID) throw new Error("COMPANY_ID missing");
-if (!LOCATION_ID) throw new Error("LOCATION_ID missing");
+// --- Env & setup ---
+const FIREBASE_SA_JSON  = process.env.FIREBASE_SA_JSON;
+const TOKEN             = process.env.SEVENSHIFTS_TOKEN;
+const COMPANY_ID        = process.env.COMPANY_ID;
+const LOCATION_ID       = process.env.LOCATION_ID;
+const WORKSPACE         = process.env.WORKSPACE || "tulia";
+const INPUT_WEEK_OF     = (process.env.INPUT_WEEK_OF || "").trim() || null;
+const CLI_WEEK          = (process.argv.find(a=>a.startsWith("--week="))||"").split("=")[1] || null;
+const RUN_PREV_WEEK     = String(process.env.RUN_PREV_WEEK||"").toLowerCase()==="true";
+const SALES_ARE_DOLLARS = String(process.env.SALES_ARE_DOLLARS||"").toLowerCase()==="true";
 
-// ---------- Time helpers (Monday..Sunday in your local timezone) ----------
-const now = DateTime.now().setZone(TIMEZONE);
-const monday = now.startOf("week").plus({ days: 1 }).startOf("day"); // Mon
-const week = Array.from({ length: 7 }, (_, i) => monday.plus({ days: i }));
-const startISO = week[0].toISODate();
-const endISO = week[6].toISODate();
-const mondayISO = startISO;
+if (!FIREBASE_SA_JSON) throw new Error("Missing FIREBASE_SA_JSON");
+if (!TOKEN)            throw new Error("Missing SEVENSHIFTS_TOKEN");
+if (!COMPANY_ID)       throw new Error("Missing COMPANY_ID");
+if (!LOCATION_ID)      throw new Error("Missing LOCATION_ID");
 
-const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const dayKeyFromISO = (iso) => {
-  const d = DateTime.fromISO(iso, { zone: TIMEZONE });
-  const idx = (d.weekday + 6) % 7; // Mon=1..Sun=7 => 0..6
-  return DAY_KEYS[idx];
-};
-
-// ---------- Firestore init ----------
 const sa = JSON.parse(FIREBASE_SA_JSON);
-initializeApp({ credential: cert(sa) });
-const db = getFirestore();
-
-// ---------- 7shifts fetch ----------
-const authHeader = { Authorization: `Bearer ${SEVENSHIFTS_TOKEN}` };
-
-// We try a small set of known/seen paths to be robust across tenants.
-const candidateUrls = [
-  // most common
-  `https://api.7shifts.com/v2/company/${COMPANY_ID}/engage/sales?start=${startISO}&end=${endISO}&location_id=${LOCATION_ID}`,
-  // alternates if the above 404s on some tenants
-  `https://api.7shifts.com/v2/company/${COMPANY_ID}/sales?start=${startISO}&end=${endISO}&location_id=${LOCATION_ID}`,
-  `https://api.7shifts.com/v2/company/${COMPANY_ID}/engage/sales?start_date=${startISO}&end_date=${endISO}&location_id=${LOCATION_ID}`,
-];
-
-async function fetchFirst200(urls) {
-  for (const url of urls) {
-    const r = await fetch(url, { headers: authHeader });
-    if (r.ok) {
-      const j = await r.json().catch(() => ({}));
-      return { url, json: j };
-    }
-  }
-  throw new Error("All 7shifts sales endpoints returned non-200.");
+if (!admin.apps.length){
+  admin.initializeApp({ credential: admin.credential.cert(sa) });
 }
+const db = admin.firestore();
 
-function getArrayPayload(json) {
-  if (Array.isArray(json)) return json;
-  if (Array.isArray(json?.data)) return json.data;
-  if (Array.isArray(json?.items)) return json.items;
-  if (Array.isArray(json?.result)) return json.result;
-  return [];
-}
-
-function pickNumber(obj, paths) {
-  for (const path of paths) {
-    let cur = obj;
-    for (const seg of path.split(".")) {
-      if (cur == null) break;
-      cur = cur[seg];
-    }
-    const n = Number(cur);
-    if (!Number.isNaN(n)) return n;
-  }
-  return 0;
-}
-
-function money(n) {
-  return (Math.round(Number(n || 0) * 100) / 100).toFixed(2);
-}
-
-function blankRow() {
-  return { mon: "", tue: "", wed: "", thu: "", fri: "", sat: "", sun: "", total: "" };
-}
-
-async function run() {
-  console.log(`Pulling 7shifts sales for ${startISO}..${endISO} (workspace=${WORKSPACE})`);
-  const { url, json } = await fetchFirst200(candidateUrls);
-  console.log(`OK ${url}`);
-
-  const rows = getArrayPayload(json);
-  if (!rows.length) throw new Error("7shifts response did not contain any rows.");
-
-  // Heuristic mapping: { date, projected, actual } with a few fallbacks
-  const proj = blankRow();
-  const act  = blankRow();
-  let sumP = 0, sumA = 0;
-
-  for (const it of rows) {
-    const dateISO =
-      it.date || it.business_date || it.sales_date || it.day || it.dt || it.start || it.start_date;
-    if (!dateISO) continue;
-
-    const k = dayKeyFromISO(String(dateISO).substring(0, 10));
-    if (!k) continue;
-
-    const projected = pickNumber(it, [
-      "projected",
-      "projection",
-      "forecast",
-      "projected.total",
-      "projected.net_sales",
-      "forecast.total",
-      "forecasted",
-    ]);
-
-    const actual = pickNumber(it, [
-      "actual",
-      "actuals",
-      "actual_sales",
-      "actual.total",
-      "actual.net_sales",
-      "net",
-      "sales",
-      "total",
-    ]);
-
-    proj[k] = money(projected);
-    act[k]  = money(actual);
-  }
-
-  // Totals
-  sumP = DAY_KEYS.reduce((a, d) => a + Number(proj[d] || 0), 0);
-  sumA = DAY_KEYS.reduce((a, d) => a + Number(act[d]  || 0), 0);
-  proj.total = money(sumP);
-  act.total  = money(sumA);
-
-  // Upsert to Firestore
-  const ref = db.collection("workspaces").doc(WORKSPACE).collection("weeks").doc(mondayISO);
-  await ref.set(
-    {
-      meta: { weekOf: mondayISO, tz: TIMEZONE, source: "7shifts" },
-      data: {
-        proj_sales: proj,   // raw totals from 7shifts
-        actual_sales: act,  // raw totals from 7shifts
-      },
-      updatedAt: DateTime.now().toISO(),
+// --- 7shifts fetch ---
+async function fetchDailySalesAndLabor({ companyId, locationId, startISO, endISO }){
+  const url = "https://api.7shifts.com/v2/reports/daily_sales_and_labor"; // GET
+  const res = await axios.get(url, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+    params: {
+      company_id: companyId,
+      location_id: locationId,
+      start_date: startISO,
+      end_date: endISO
     },
-    { merge: true }
-  );
-
-  console.log("Firestore updated:", ref.path);
+    timeout: 30000
+  });
+  const rows = res.data?.data || [];
+  const byDate = new Map();
+  for (const r of rows){
+    // 7shifts commonly returns currency as integer "cents" (see sample in docs).
+    // If your tenant returns dollars, set SALES_ARE_DOLLARS=true to skip /100.
+    const toDollars = (x)=> SALES_ARE_DOLLARS ? Number(x||0) : Number(x||0)/100;
+    byDate.set(r.date, {
+      projected: toDollars(r.projected_sales),
+      actual:    toDollars(r.actual_sales),
+    });
+  }
+  return byDate;
 }
 
-run().catch((e) => {
-  console.error("FAILED:", e?.message || e);
+// --- Build week rows for our front-end ---
+function emptyRow(){ return { mon:"",tue:"",wed:"",thu:"",fri:"",sat:"",sun:"", total:"" }; }
+
+function buildWeekRows(weekMon, byDate){
+  const rowProj = emptyRow();
+  const rowAct  = emptyRow();
+  let totP = 0, totA = 0;
+
+  for (let i=0;i<7;i++){
+    const d = addDays(weekMon, i);
+    const iso = toISO(d);
+    const entry = byDate.get(iso) || { projected: 0, actual: 0 };
+    const key = DAYS[i];
+    rowProj[key] = money(entry.projected);
+    rowAct[key]  = money(entry.actual);
+    totP += entry.projected;
+    totA += entry.actual;
+  }
+  rowProj.total = money(totP);
+  rowAct.total  = money(totA);
+  return { rowProj, rowAct };
+}
+
+// --- Firestore write ---
+async function writeWeek({ workspace, weekISO, rowProj, rowAct }){
+  const ref = db.collection("workspaces").doc(workspace).collection("weeks").doc(weekISO);
+  await ref.set({
+    data: {
+      proj_sales:  rowProj,
+      actual_sales:rowAct
+    },
+    meta: { weekOf: weekISO }
+  }, { merge: true });
+  console.log(`✔ Wrote ${workspace}/weeks/${weekISO}`);
+}
+
+// --- Orchestrate one week ---
+async function runForWeek(weekAnyDateISO){
+  const weekMon = mondayOf(weekAnyDateISO);
+  const weekISO = toISO(weekMon);
+  const startISO = weekISO;
+  const endISO   = toISO(addDays(weekMon, 6));
+
+  console.log(`Fetching 7shifts sales for ${startISO} → ${endISO} (company ${COMPANY_ID}, location ${LOCATION_ID})`);
+  const byDate = await fetchDailySalesAndLabor({
+    companyId: COMPANY_ID,
+    locationId: LOCATION_ID,
+    startISO, endISO
+  });
+  const { rowProj, rowAct } = buildWeekRows(weekMon, byDate);
+  await writeWeek({ workspace: WORKSPACE, weekISO, rowProj, rowAct });
+}
+
+// --- Main ---
+(async ()=>{
+  const baseISO = toISO(mondayOf(CLI_WEEK || INPUT_WEEK_OF || toISO(new Date())));
+  // current week
+  await runForWeek(baseISO);
+  // optionally also refresh previous week (helps finish late POS syncs on Mondays)
+  if (RUN_PREV_WEEK){
+    const prevISO = toISO(addDays(new Date(baseISO), -7));
+    await runForWeek(prevISO);
+  }
+  process.exit(0);
+})().catch(err=>{
+  console.error("✖ pull-7shifts-sales failed:", err.response?.data || err);
   process.exit(1);
 });
+
+
