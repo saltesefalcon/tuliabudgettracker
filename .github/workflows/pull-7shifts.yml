@@ -1,0 +1,41 @@
+name: Pull 7shifts sales into Firestore
+
+on:
+  workflow_dispatch:
+    inputs:
+      week_of:
+        description: "Any date in the target week (YYYY-MM-DD). If blank, uses this week."
+        required: false
+  schedule:
+    # Runs daily at ~05:10 America/Toronto (09:10 UTC)
+    - cron: "10 9 * * *"
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    env:
+      FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
+      SEVENSHIFTS_TOKEN: ${{ secrets.SEVENSHIFTS_TOKEN }}
+      COMPANY_ID: ${{ vars.COMPANY_ID }}
+      LOCATION_ID: ${{ vars.LOCATION_ID }}
+      WORKSPACE: ${{ vars.WORKSPACE }} # set to "tulia" in repo variables
+      INPUT_WEEK_OF: ${{ github.event.inputs.week_of }}
+      RUN_PREV_WEEK: "true"            # also refresh last week to catch late data
+      SALES_ARE_DOLLARS: ${{ vars.SEVENSHIFTS_SALES_ARE_DOLLARS }} # optional: "true"
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps (axios, firebase-admin, dayjs)
+        run: |
+          npm init -y --silent
+          npm i axios firebase-admin dayjs
+
+      - name: Pull sales for this/last week
+        run: node scripts/pull-7shifts-sales.mjs
